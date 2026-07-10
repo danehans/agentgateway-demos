@@ -239,7 +239,7 @@ Commands:
   report     Regenerate the latest text and JSON result summaries
   chart      Render an SVG chart from the latest or SUMMARY_FILE summary JSON
   router     Redeploy vSR and experiment resources after tuning the fetched config
-  refresh    Replace the fetched PR #2486 checkout with EXAMPLE_REF
+  refresh    Replace the fetched agentgateway checkout with EXAMPLE_REF
   status     Show the deployed resources and resolved example revision
   dashboard  Port-forward Grafana to http://localhost:3000
   cleanup    Delete the demo cluster, or demo namespaces on a reused cluster
@@ -252,7 +252,7 @@ Important environment variables:
   EVAL_LIMIT              Corpus rows to run; defaults to 20 (60 requests)
   CAPTURE_OUTPUT          true to save model responses for satisfaction scoring
   SUMMARY_FILE             Summary JSON used by chart; defaults to the latest run
-  EXAMPLE_REF             Defaults to refs/pull/2486/head; use a SHA to pin a run
+  EXAMPLE_REF             Defaults to main; use a SHA to pin upstream configuration
   VSR_CHART_VERSION       Defaults to the 0.3.0 release chart
   VSR_IMAGE_TAG           Defaults to the v0.3.0 extproc image
   VERIFY_TIMEOUT_SEC      Component and endpoint timeout; defaults to 300
@@ -528,7 +528,7 @@ verify_router_services() {
   retry_until "vSR configured model registration" \
     "${VERIFY_TIMEOUT_SEC}" "${VERIFY_INTERVAL_SEC}" \
     python3 "${ROOT_DIR}/scripts/verify_observability.py" models \
-      --url "${url}" --corpus "${EXAMPLE_DIR}/data/eval-corpus.jsonl"
+      --url "${url}" --corpus "${ROOT_DIR}/data/eval-corpus.jsonl"
   stop_port_forward "${pid}"
 
   verify_tcp_service "${NAMESPACE}" semantic-router 50051 "vSR ExtProc gRPC"
@@ -810,7 +810,7 @@ fetch_example() {
     return
   fi
 
-  log "Fetching agentgateway/agentgateway#2486 (${EXAMPLE_REF})"
+  log "Fetching agentgateway configuration (${EXAMPLE_REF})"
   mkdir -p "${CHECKOUT_DIR}"
   git -C "${CHECKOUT_DIR}" init --quiet
   git -C "${CHECKOUT_DIR}" remote add origin "${EXAMPLE_REPO_URL}"
@@ -879,7 +879,7 @@ configure_openai_and_catalog() {
   log "Generating the OpenAI model cost catalog with agctl"
   "${agctl}" costs import --pretty --providers openai --out "${WORK_DIR}/catalog.json"
   catalog_has_expected_models \
-    "${WORK_DIR}/catalog.json" "${EXAMPLE_DIR}/data/eval-corpus.jsonl"
+    "${WORK_DIR}/catalog.json" "${ROOT_DIR}/data/eval-corpus.jsonl"
   kubectl create configmap semantic-routing-model-costs \
     --namespace "${NAMESPACE}" \
     --from-file="catalog.json=${WORK_DIR}/catalog.json" \
@@ -1022,8 +1022,9 @@ deploy_router() {
     --wait --timeout "${VSR_READY_TIMEOUT_SEC}s"
   verify_router_services
 
-  log "Applying the three experiment lanes and streamed ExtProc policy"
-  kubectl apply -f "${EXAMPLE_DIR}/k8s/agentgateway-experiment.yaml"
+  log "Applying routed semantic-routing configuration and demo baseline lanes"
+  kubectl apply -f "${EXAMPLE_DIR}/k8s/agentgateway-routing.yaml"
+  kubectl apply -f "${CONFIG_DIR}/evaluation-lanes.yaml"
   kubectl wait --for=condition=Accepted agentgatewaybackend --all \
     --namespace "${NAMESPACE}" --timeout=300s
   retry_until "accepted HTTPRoutes with resolved references" \
@@ -1036,7 +1037,7 @@ deploy_router() {
   fi
   retry_until "accepted and attached agentgateway policies" \
     "${VERIFY_TIMEOUT_SEC}" "${VERIFY_INTERVAL_SEC}" agentgateway_policies_ready
-  log "Verified experiment backends, routes, ExtProc policy, and telemetry policy"
+  log "Verified routed configuration, demo baseline lanes, and telemetry policy"
 }
 
 gateway_url() {
@@ -1163,9 +1164,10 @@ run_eval_file() {
   if [[ "${CAPTURE_OUTPUT}" == "true" ]]; then
     capture_args+=(--capture-output)
   fi
-  python3 "${EXAMPLE_DIR}/scripts/run_eval.py" \
+  python3 "${ROOT_DIR}/scripts/run_eval.py" \
     --gateway-url "$(gateway_url)" \
-    --dataset "${EXAMPLE_DIR}/data/eval-corpus.jsonl" \
+    --dataset "${ROOT_DIR}/data/eval-corpus.jsonl" \
+    --catalog "${WORK_DIR}/catalog.json" \
     --run-id "${run_id}" \
     --output "${output}" \
     --limit "${limit}" \
@@ -1197,7 +1199,7 @@ cmd_eval() {
   write_metadata "${run_id}" "${result_file}"
 
   if [[ "${CAPTURE_OUTPUT}" == "true" ]]; then
-    cp "${EXAMPLE_DIR}/data/ratings-template.csv" "${RESULTS_DIR}/${run_id}-ratings.csv"
+    cp "${ROOT_DIR}/data/ratings-template.csv" "${RESULTS_DIR}/${run_id}-ratings.csv"
   fi
 
   cmd_report
@@ -1206,7 +1208,6 @@ cmd_eval() {
 cmd_report() {
   preflight
   use_cluster
-  fetch_example
   local result_file result_base summary_json summary_text summary_chart experiment_id
   local local_json local_text prometheus_json prometheus_text ratings_file
   local port_forward_pid prometheus_status prometheus_reason prometheus_url
@@ -1230,10 +1231,6 @@ with open(sys.argv[1], encoding="utf-8") as stream:
             break
 ' "${result_file}")"
   [[ -n "${experiment_id}" ]] || die "result file does not contain a run_id: ${result_file}"
-  python3 "${EXAMPLE_DIR}/scripts/summarize_results.py" --help \
-    | grep -Fq -- '--json-output' \
-    || die "the fetched example predates persisted summaries; run ./demo.sh refresh --yes"
-
   result_base="${result_file%.jsonl}"
   summary_json="${result_base}-summary.json"
   summary_text="${result_base}-summary.txt"
@@ -1247,8 +1244,9 @@ with open(sys.argv[1], encoding="utf-8") as stream:
   if [[ -f "${ratings_file}" ]]; then
     ratings_args+=(--ratings "${ratings_file}")
   fi
-  python3 "${EXAMPLE_DIR}/scripts/summarize_results.py" \
+  python3 "${ROOT_DIR}/scripts/summarize_results.py" \
     "${result_file}" \
+    --catalog "${WORK_DIR}/catalog.json" \
     --json-output "${local_json}" \
     --text-output "${local_text}" \
     "${ratings_args[@]}" \

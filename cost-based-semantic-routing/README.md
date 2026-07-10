@@ -5,10 +5,10 @@ prompts to a lower-cost model and advanced prompts to a higher-capability model.
 It then measures whether that policy reduces realized LLM cost without hiding
 the effects on routing accuracy, answer quality, or latency.
 
-The Kubernetes resources and evaluation tooling come directly from
-[agentgateway/agentgateway#2486](https://github.com/agentgateway/agentgateway/pull/2486).
-This repository supplies the prerequisites and a reproducible command surface
-around that example.
+The reusable routing configuration comes from the agentgateway semantic-routing
+example. This repository owns the disposable cluster, forced-model baselines,
+corpora, evaluation tooling, observability verification, and result chart used
+to measure that configuration.
 
 ## Architecture
 
@@ -35,7 +35,7 @@ prices the realized request and provides the evidence used to tune the policy.
 - Docker with at least 12 GB of memory for the default full observability stack
 - At least 30 GB of free disk for images, the vSR model cache, and telemetry data
 - `kind` 0.29 or newer, `kubectl`, `helm`, `curl`, `git`, and Python 3
-- An OpenAI API key with access to both models configured by PR #2486
+- An OpenAI API key with access to both models in the upstream routing values
 
 The script installs Kubernetes components, but it does not install host CLI
 tools. It supports macOS and Linux and downloads a checksum-verified `agctl`
@@ -78,8 +78,9 @@ known failures.
 4. Stores the catalog in a ConfigMap and attaches it to the Gateway-level
    `AgentgatewayParameters` resource.
 5. Installs Prometheus, Grafana, OpenTelemetry collectors, Loki, and Tempo.
-6. Fetches `refs/pull/2486/head` and records the resolved commit SHA.
-7. Installs vSR from the PR's Helm values and applies its three experiment lanes.
+6. Fetches the selected upstream agentgateway revision and records its SHA.
+7. Installs vSR from the upstream Helm values, then applies the core routed
+   configuration and this demo's forced-model baseline lanes.
 8. Verifies streamed ExtProc with an immediate response that consumes no model
    tokens and never reaches OpenAI.
 9. Sends every selected corpus prompt through `routed`, `always_low_cost`, and
@@ -119,16 +120,18 @@ VERIFY_INTERVAL_SEC=5 \
 ./demo.sh all
 ```
 
-The wrapper intentionally does not copy the PR's routing configuration or eval
-logic. It runs these files from the fetched revision:
+The demo consumes these reusable configuration files from the selected
+agentgateway revision:
 
 - `k8s/semantic-router-values.yaml`
-- `k8s/agentgateway-experiment.yaml`
-- `data/eval-corpus.jsonl`
-- `scripts/run_eval.py`
-- `scripts/summarize_results.py`
+- `k8s/agentgateway-routing.yaml`
 
-The PR enables persistent vSR model storage on kind's `standard` storage class.
+The corpus, runner, local summary, baseline routes, ratings template, PromQL
+reference, and chart renderer live in this repository. The forced lanes accept
+the `X-Eval-Lane` header only in the dedicated demo cluster; they are not part
+of the upstream routing configuration.
+
+The upstream values enable persistent vSR model storage on kind's `standard` storage class.
 The first setup downloads the local classification and embedding models; tuning
 redeploys reuse that cache.
 
@@ -139,11 +142,11 @@ runs use the same release. Override both pins together when testing an upgrade:
 VSR_CHART_VERSION=0.3.0 VSR_IMAGE_TAG=v0.3.0 ./demo.sh setup
 ```
 
-Use a commit SHA instead of the moving PR ref for a reproducible publication
-run:
+The default upstream revision is `main`. Use a merged commit SHA for a
+reproducible publication run:
 
 ```bash
-EXAMPLE_REF=9fe0326b4a6dcc69e889f171f50a3855529f4847 ./demo.sh refresh
+EXAMPLE_REF=<agentgateway-commit-sha> ./demo.sh refresh
 ```
 
 ## Commands
@@ -154,7 +157,7 @@ EXAMPLE_REF=9fe0326b4a6dcc69e889f171f50a3855529f4847 ./demo.sh refresh
 ./demo.sh eval        # Run the paid smoke test and experiment
 ./demo.sh report      # Regenerate local and Prometheus summary artifacts
 ./demo.sh chart       # Render an SVG chart from the latest result summary
-./demo.sh status      # Inspect resources and the resolved PR revision
+./demo.sh status      # Inspect resources and the resolved upstream revision
 ./demo.sh dashboard   # Open a Grafana port-forward on localhost:3000
 ./demo.sh cleanup     # Delete the dedicated cluster
 ```
@@ -209,8 +212,10 @@ as the experiment's cost source of record. `./demo.sh report` regenerates both
 summary artifacts for `results/<RUN_ID>.jsonl`, or for `RESULT_FILE` when it is
 set. When Prometheus is disabled or unavailable, that status and reason are
 preserved in both artifacts instead of silently omitting the section.
-Existing demo checkouts that fetched an older PR revision must run
-`./demo.sh refresh --yes` once to obtain structured-summary support.
+For manual inspection, `promql/queries.promql` contains queries scoped to one
+`experiment_id`, rather than a shared time window.
+Run `./demo.sh refresh --yes` after changing `EXAMPLE_REF`; setup and evaluation
+reuse an existing fetched checkout by design.
 
 The evaluation and `report` command generate the SVG chart automatically. It
 prefers catalog-priced agentgateway metrics when Prometheus is available and
@@ -275,14 +280,15 @@ the `-summary.json` and `-summary.txt` files are created independently.
 
 ## Model availability
 
-The configured model names come from the fetched PR revision. Model catalog
-entries do not grant API access. If OpenAI returns `model_not_found`, verify the
-model IDs and project access, update PR #2486, refresh this demo, and rerun. The
-smoke result file preserves the exact error response for diagnosis.
+The configured model names come from the fetched upstream revision. Model
+catalog entries do not grant API access. If OpenAI returns `model_not_found`,
+verify the model IDs and project access, update the selected upstream
+configuration, refresh this demo, and rerun. The smoke result file preserves the
+exact error response for diagnosis.
 
 ## Resources
 
-- [Cost-based routing example PR](https://github.com/agentgateway/agentgateway/pull/2486)
+- [agentgateway semantic-routing example](https://github.com/agentgateway/agentgateway/tree/main/examples/llm-semantic-routing)
 - [agentgateway model costs](https://agentgateway.dev/docs/kubernetes/main/llm/costs/)
 - [agentgateway cost tracking](https://agentgateway.dev/docs/kubernetes/main/llm/cost-tracking/)
 - [agentgateway OTel stack](https://agentgateway.dev/docs/kubernetes/main/observability/otel-stack/)

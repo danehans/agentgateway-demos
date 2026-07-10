@@ -31,6 +31,10 @@ render_experiment_chart = load_module(
     "render_experiment_chart",
     DEMO_DIR / "scripts" / "render_experiment_chart.py",
 )
+run_eval = load_module("run_eval", DEMO_DIR / "scripts" / "run_eval.py")
+summarize_results = load_module(
+    "summarize_results", DEMO_DIR / "scripts" / "summarize_results.py"
+)
 
 
 class PrometheusReportTest(unittest.TestCase):
@@ -287,6 +291,58 @@ class RenderExperimentChartTest(unittest.TestCase):
         self.assertEqual(
             render_experiment_chart.chart_output_path(Path("run-summary.json")),
             Path("run-chart.svg"),
+        )
+
+
+class EvaluationToolingTest(unittest.TestCase):
+    def setUp(self):
+        self.catalog = {
+            "providers": {
+                "openai": {
+                    "models": {
+                        "gpt-cheap": {"rates": {"input": "1", "cacheRead": "0.5", "output": "2"}},
+                        "gpt-expensive": {"rates": {"input": "5", "cacheRead": "2.5", "output": "10"}},
+                    }
+                }
+            }
+        }
+
+    def test_evaluator_uses_the_generated_catalog_for_model_versions(self):
+        usage = {"input_tokens": 100, "cached_input_tokens": 20, "output_tokens": 10}
+
+        cost = run_eval.estimate_cost(
+            self.catalog, "gpt-cheap", "gpt-cheap-2026-07-01", usage
+        )
+
+        self.assertAlmostEqual(cost, 0.00011)
+        self.assertEqual(
+            run_eval.canonical_model(self.catalog, "gpt-cheap-2026-07-01"),
+            "gpt-cheap",
+        )
+
+    def test_summary_uses_catalog_pricing_for_counterfactual(self):
+        rows = [
+            {
+                "lane": "routed", "ok": True, "routing_correct": True,
+                "expected_model": "gpt-cheap", "selected_model": "gpt-cheap",
+                "cost_estimate_usd": 0.0001, "latency_ms": 1000,
+                "usage": {"input_tokens": 100, "cached_input_tokens": 0, "output_tokens": 10},
+            },
+            {
+                "lane": "always_expensive", "ok": True,
+                "cost_estimate_usd": 0.0006, "latency_ms": 2000,
+                "usage": {"input_tokens": 100, "cached_input_tokens": 0, "output_tokens": 10},
+            },
+        ]
+
+        summary = summarize_results.build_summary(
+            rows, {}, self.catalog, "gpt-expensive"
+        )
+
+        self.assertEqual(summary["routing"]["accuracy"], 1.0)
+        self.assertAlmostEqual(
+            summary["savings"]["counterfactual_on_routed_tokens"]["always_expensive_cost_usd"],
+            0.0006,
         )
 
 

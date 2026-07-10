@@ -27,6 +27,10 @@ prometheus_report = load_module(
 verify_observability = load_module(
     "verify_observability", DEMO_DIR / "scripts" / "verify_observability.py"
 )
+render_experiment_chart = load_module(
+    "render_experiment_chart",
+    DEMO_DIR / "scripts" / "render_experiment_chart.py",
+)
 
 
 class PrometheusReportTest(unittest.TestCase):
@@ -211,6 +215,79 @@ class AssembleSummaryTest(unittest.TestCase):
                 "Catalog-backed Prometheus summary (experiment-scoped)", rendered
             )
             self.assertIn("Routing accuracy: 90.0%", rendered)
+
+
+class RenderExperimentChartTest(unittest.TestCase):
+    def test_uses_catalog_priced_costs_and_renders_key_metrics(self):
+        summary = {
+            "run_id": "test-run",
+            "local": {
+                "lanes": {
+                    "always_low_cost": {
+                        "cost_estimate_usd": 0.02,
+                        "latency_ms": {"p50": 800, "p95": 1200},
+                    },
+                    "routed": {
+                        "cost_estimate_usd": 0.70,
+                        "latency_ms": {"p50": 2500, "p95": 4000},
+                    },
+                    "always_expensive": {
+                        "cost_estimate_usd": 1.00,
+                        "latency_ms": {"p50": 2000, "p95": 3500},
+                    },
+                },
+                "routing": {"accuracy": 0.8, "correct": 16, "total": 20},
+            },
+            "prometheus": {
+                "status": "collected",
+                "report": {
+                    "catalog_backed_realized_cost_by_lane": [
+                        {"eval_lane": "always_low_cost", "cost_usd": 0.01},
+                        {"eval_lane": "routed", "cost_usd": 0.25},
+                        {"eval_lane": "routed", "cost_usd": 0.35},
+                        {"eval_lane": "always_expensive", "cost_usd": 1.00},
+                    ]
+                },
+            },
+        }
+
+        costs, source = render_experiment_chart.cost_data(summary)
+        chart = render_experiment_chart.render_chart(summary)
+
+        self.assertEqual(source, "Catalog-priced agentgateway metrics")
+        self.assertAlmostEqual(costs["routed"], 0.60)
+        self.assertIn("40.0%", chart)
+        self.assertIn("16 / 20", chart)
+        self.assertIn("2.50 s p50", chart)
+        self.assertIn("Catalog-priced agentgateway metrics", chart)
+
+    def test_falls_back_to_local_costs_and_uses_run_chart_name(self):
+        summary = {
+            "local": {
+                "lanes": {
+                    lane: {
+                        "cost_estimate_usd": cost,
+                        "latency_ms": {"p50": 1000, "p95": 2000},
+                    }
+                    for lane, cost in (
+                        ("always_low_cost", 0.01),
+                        ("routed", 0.50),
+                        ("always_expensive", 1.00),
+                    )
+                },
+                "routing": {"accuracy": 1.0, "correct": 1, "total": 1},
+            },
+            "prometheus": {"status": "disabled"},
+        }
+
+        costs, source = render_experiment_chart.cost_data(summary)
+
+        self.assertEqual(source, "Local token-cost estimate")
+        self.assertAlmostEqual(costs["routed"], 0.50)
+        self.assertEqual(
+            render_experiment_chart.chart_output_path(Path("run-summary.json")),
+            Path("run-chart.svg"),
+        )
 
 
 class VerifyObservabilityTest(unittest.TestCase):

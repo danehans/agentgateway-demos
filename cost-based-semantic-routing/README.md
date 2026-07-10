@@ -153,6 +153,7 @@ EXAMPLE_REF=9fe0326b4a6dcc69e889f171f50a3855529f4847 ./demo.sh refresh
 ./demo.sh verify      # Test streamed ExtProc without calling OpenAI
 ./demo.sh eval        # Run the paid smoke test and experiment
 ./demo.sh report      # Regenerate local and Prometheus summary artifacts
+./demo.sh chart       # Render an SVG chart from the latest result summary
 ./demo.sh status      # Inspect resources and the resolved PR revision
 ./demo.sh dashboard   # Open a Grafana port-forward on localhost:3000
 ./demo.sh cleanup     # Delete the dedicated cluster
@@ -194,6 +195,7 @@ Results are written to `results/`:
 - `<RUN_ID>-ratings.csv`: created when `CAPTURE_OUTPUT=true`
 - `<RUN_ID>-summary.json`: structured local and catalog-backed Prometheus results
 - `<RUN_ID>-summary.txt`: readable cost, accuracy, satisfaction, and latency report
+- `<RUN_ID>-chart.svg`: blog-ready comparison of spend, selection accuracy, and latency
 
 The local summary estimates cost from response token usage and the example's
 rate table. The experiment-scoped Prometheus summary uses the run's unique
@@ -209,6 +211,20 @@ set. When Prometheus is disabled or unavailable, that status and reason are
 preserved in both artifacts instead of silently omitting the section.
 Existing demo checkouts that fetched an older PR revision must run
 `./demo.sh refresh --yes` once to obtain structured-summary support.
+
+The evaluation and `report` command generate the SVG chart automatically. It
+prefers catalog-priced agentgateway metrics when Prometheus is available and
+otherwise labels the local token-cost estimate. Regenerate a chart later without
+requiring a Kubernetes cluster:
+
+```bash
+SUMMARY_FILE=results/<RUN_ID>-summary.json ./demo.sh chart
+```
+
+The SVG compares the routed lane with the always-expensive counterfactual,
+shows corpus-label model-selection accuracy, and reports routed p50/p95 latency.
+It is intentionally a compact companion to the JSON rather than a replacement
+for the full per-request evidence.
 
 ## Tune the routing policy
 

@@ -197,6 +197,36 @@ generate_prometheus_report() {
     >"$6"
 }
 
+summary_chart_path() {
+  local summary_path="$1" base
+  base="${summary_path%-summary.json}"
+  if [[ "${base}" == "${summary_path}" ]]; then
+    base="${summary_path%.json}"
+  fi
+  printf '%s-chart.svg\n' "${base}"
+}
+
+render_summary_chart() {
+  python3 "${ROOT_DIR}/scripts/render_experiment_chart.py" \
+    "$1" --output "$2"
+}
+
+resolve_summary_json() {
+  local result_file
+  if [[ -n "${SUMMARY_FILE:-}" ]]; then
+    printf '%s\n' "${SUMMARY_FILE}"
+    return
+  fi
+  if [[ -n "${RESULT_FILE:-}" ]]; then
+    printf '%s-summary.json\n' "${RESULT_FILE%.jsonl}"
+    return
+  fi
+  [[ -f "${RESULTS_DIR}/latest-result" ]] \
+    || die "no summary file found; run ./demo.sh eval or set SUMMARY_FILE"
+  result_file="$(cat "${RESULTS_DIR}/latest-result")"
+  printf '%s-summary.json\n' "${result_file%.jsonl}"
+}
+
 usage() {
   cat <<'EOF'
 Usage: ./demo.sh COMMAND [--yes]
@@ -207,6 +237,7 @@ Commands:
   verify     Run the zero-token immediate-response ExtProc probe
   eval       Run a paid smoke test, the three-lane corpus, and a result summary
   report     Regenerate the latest text and JSON result summaries
+  chart      Render an SVG chart from the latest or SUMMARY_FILE summary JSON
   router     Redeploy vSR and experiment resources after tuning the fetched config
   refresh    Replace the fetched PR #2486 checkout with EXAMPLE_REF
   status     Show the deployed resources and resolved example revision
@@ -220,6 +251,7 @@ Important environment variables:
   OBSERVABILITY_PROFILE   full (default), metrics, or none
   EVAL_LIMIT              Corpus rows to run; defaults to 20 (60 requests)
   CAPTURE_OUTPUT          true to save model responses for satisfaction scoring
+  SUMMARY_FILE             Summary JSON used by chart; defaults to the latest run
   EXAMPLE_REF             Defaults to refs/pull/2486/head; use a SHA to pin a run
   VSR_CHART_VERSION       Defaults to the 0.3.0 release chart
   VSR_IMAGE_TAG           Defaults to the v0.3.0 extproc image
@@ -1175,7 +1207,7 @@ cmd_report() {
   preflight
   use_cluster
   fetch_example
-  local result_file result_base summary_json summary_text experiment_id
+  local result_file result_base summary_json summary_text summary_chart experiment_id
   local local_json local_text prometheus_json prometheus_text ratings_file
   local port_forward_pid prometheus_status prometheus_reason prometheus_url
   local summary_args=() ratings_args=()
@@ -1256,11 +1288,23 @@ with open(sys.argv[1], encoding="utf-8") as stream:
     )
   fi
   python3 "${ROOT_DIR}/scripts/assemble_summary.py" "${summary_args[@]}"
+  summary_chart="$(summary_chart_path "${summary_json}")"
+  render_summary_chart "${summary_json}" "${summary_chart}"
 
   log "Experiment summary"
   cat "${summary_text}"
   printf 'JSON summary: %s\n' "${summary_json}"
   printf 'Text summary: %s\n' "${summary_text}"
+  printf 'Chart: %s\n' "${summary_chart}"
+}
+
+cmd_chart() {
+  local summary_json summary_chart
+  summary_json="$(resolve_summary_json)"
+  [[ -f "${summary_json}" ]] || die "summary file does not exist: ${summary_json}"
+  summary_chart="$(summary_chart_path "${summary_json}")"
+  render_summary_chart "${summary_json}" "${summary_chart}"
+  printf 'Chart: %s\n' "${summary_chart}"
 }
 
 cmd_router() {
@@ -1343,6 +1387,7 @@ case "${COMMAND}" in
   verify) cmd_verify ;;
   eval) cmd_eval ;;
   report) cmd_report ;;
+  chart) cmd_chart ;;
   router) cmd_router ;;
   refresh) cmd_refresh ;;
   status) cmd_status ;;

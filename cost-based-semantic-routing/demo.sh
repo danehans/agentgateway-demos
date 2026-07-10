@@ -74,6 +74,8 @@ Important environment variables:
   EVAL_LIMIT              Corpus rows to run; defaults to 20 (60 requests)
   CAPTURE_OUTPUT          true to save model responses for satisfaction scoring
   EXAMPLE_REF             Defaults to refs/pull/2486/head; use a SHA to pin a run
+  VSR_CHART_VERSION       Defaults to the 0.3.0 release chart
+  VSR_IMAGE_TAG           Defaults to the v0.3.0 extproc image
   CLUSTER_NAME            Defaults to agentgateway-cost-routing
   METALLB_IP_RANGE        Optional explicit range, for example 172.18.250.10-172.18.250.60
   MIN_FREE_DISK_GB        Override the host free-space guard; set 0 to disable it
@@ -424,12 +426,13 @@ deploy_router() {
       --from-literal="token=${HF_TOKEN}" \
       --dry-run=client -o yaml | kubectl apply -f -
   fi
-  log "Installing vLLM Semantic Router ${VSR_CHART_VERSION}"
+  log "Installing vLLM Semantic Router chart ${VSR_CHART_VERSION}, image ${VSR_IMAGE_TAG}"
   helm upgrade --install semantic-router \
     oci://ghcr.io/vllm-project/charts/semantic-router \
     --version "${VSR_CHART_VERSION}" \
     --namespace "${NAMESPACE}" \
     --values "${EXAMPLE_DIR}/k8s/semantic-router-values.yaml" \
+    --set-string "image.tag=${VSR_IMAGE_TAG}" \
     --wait --timeout 20m
 
   log "Applying the three experiment lanes and streamed ExtProc policy"
@@ -514,6 +517,7 @@ write_metadata() {
   EXAMPLE_SHA="$(cat "${WORK_DIR}/example-revision")" \
   AGW_VERSION="${AGENTGATEWAY_VERSION}" \
   VSR_VERSION="${VSR_CHART_VERSION}" \
+  VSR_IMAGE="${VSR_IMAGE_TAG}" \
   OBS_PROFILE="${OBSERVABILITY_PROFILE}" \
   python3 - <<'PY'
 import json
@@ -528,6 +532,7 @@ metadata = {
     "created_at": datetime.now(timezone.utc).isoformat(),
     "agentgateway_version": os.environ["AGW_VERSION"],
     "semantic_router_chart_version": os.environ["VSR_VERSION"],
+    "semantic_router_image_tag": os.environ["VSR_IMAGE"],
     "example_commit": os.environ["EXAMPLE_SHA"],
     "observability_profile": os.environ["OBS_PROFILE"],
     "requests": len(rows),

@@ -98,11 +98,18 @@ The PR enables persistent vSR model storage on kind's `standard` storage class.
 The first setup downloads the local classification and embedding models; tuning
 redeploys reuse that cache.
 
+The demo pins the vSR `0.3.0` Helm chart and `v0.3.0` `extproc` image so repeated
+runs use the same release. Override both pins together when testing an upgrade:
+
+```bash
+VSR_CHART_VERSION=0.3.0 VSR_IMAGE_TAG=v0.3.0 ./demo.sh setup
+```
+
 Use a commit SHA instead of the moving PR ref for a reproducible publication
 run:
 
 ```bash
-EXAMPLE_REF=31aeed6a4148ca49ac2018f40104bbf09d38ca2d ./demo.sh refresh
+EXAMPLE_REF=e7b5a567b5a5cc7287ef6fe3e9d7aa1d98275b33 ./demo.sh refresh
 ```
 
 ## Commands

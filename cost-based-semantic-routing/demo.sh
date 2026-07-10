@@ -15,8 +15,10 @@ source "${CONFIG_DIR}/versions.env"
 
 CLUSTER_NAME="${CLUSTER_NAME:-agentgateway-cost-routing}"
 KIND_NODE_IMAGE="${KIND_NODE_IMAGE:-kindest/node:v1.34.0}"
-NAMESPACE="${NAMESPACE:-agentgateway-system}"
-TELEMETRY_NAMESPACE="${TELEMETRY_NAMESPACE:-telemetry}"
+# The checked-in manifests target these dedicated namespaces. Do not inherit
+# generic shell variables such as NAMESPACE from another Kubernetes workflow.
+NAMESPACE="agentgateway-system"
+TELEMETRY_NAMESPACE="telemetry"
 if [[ -z "${OBSERVABILITY_PROFILE:-}" && -f "${WORK_DIR}/observability-profile" ]]; then
   OBSERVABILITY_PROFILE="$(cat "${WORK_DIR}/observability-profile")"
 fi
@@ -165,6 +167,13 @@ service_has_endpoints() {
   local namespace="$1" service="$2"
   [[ -n "$(kubectl get endpoints "${service}" --namespace "${namespace}" \
     -o jsonpath='{.subsets[*].addresses[*].ip}' 2>/dev/null)" ]]
+}
+
+ensure_namespace() {
+  local namespace="$1"
+  kubectl create namespace "${namespace}" --dry-run=client -o yaml | kubectl apply -f -
+  retry_until "${namespace} namespace" "${VERIFY_TIMEOUT_SEC}" "${VERIFY_INTERVAL_SEC}" \
+    kubectl get namespace "${namespace}"
 }
 
 verify_http_service() {
@@ -781,10 +790,10 @@ install_agentgateway() {
     crd/httproutes.gateway.networking.k8s.io \
     --timeout="${VERIFY_TIMEOUT_SEC}s"
 
+  ensure_namespace "${NAMESPACE}"
   log "Installing agentgateway ${AGENTGATEWAY_VERSION}"
   helm upgrade --install agentgateway-crds \
     oci://cr.agentgateway.dev/charts/agentgateway-crds \
-    --create-namespace \
     --namespace "${NAMESPACE}" \
     --version "${AGENTGATEWAY_VERSION}" \
     --wait --timeout 10m
@@ -898,6 +907,7 @@ install_observability() {
     return
   fi
 
+  ensure_namespace "${TELEMETRY_NAMESPACE}"
   log "Installing Prometheus and Grafana"
   prometheus_values="${CONFIG_DIR}/observability/kube-prometheus-stack-values.yaml"
   if [[ "${OBSERVABILITY_PROFILE}" == "full" ]]; then
@@ -907,7 +917,6 @@ install_observability() {
     --repo https://prometheus-community.github.io/helm-charts \
     --version "${PROMETHEUS_STACK_VERSION}" \
     --namespace "${TELEMETRY_NAMESPACE}" \
-    --create-namespace \
     --values "${prometheus_values}" \
     --wait --timeout 15m
   kubectl rollout status deployment/kube-prometheus-stack-operator \
@@ -987,6 +996,8 @@ install_observability() {
 
 deploy_gateway() {
   log "Creating the catalog-backed agentgateway proxy"
+  retry_until "${NAMESPACE} namespace" "${VERIFY_TIMEOUT_SEC}" "${VERIFY_INTERVAL_SEC}" \
+    kubectl get namespace "${NAMESPACE}"
   kubectl apply -f "${CONFIG_DIR}/gateway.yaml"
   kubectl wait --for=condition=Programmed gateway/agentgateway-proxy \
     --namespace "${NAMESPACE}" --timeout=600s

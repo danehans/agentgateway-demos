@@ -1,0 +1,36 @@
+grafana:
+  datasources:
+    datasources.yaml:
+      apiVersion: 1
+      datasources:
+      - name: Prometheus
+        type: prometheus
+        uid: prometheus
+        access: proxy
+        orgId: 1
+        url: http://kube-prometheus-stack-prometheus.telemetry:9090
+        basicAuth: false
+        editable: true
+        jsonData:
+          httpMethod: GET
+          exemplarTraceIdDestinations:
+          - name: trace_id
+            datasourceUid: tempo
+      - name: Tempo
+        type: tempo
+        uid: tempo
+        access: proxy
+        orgId: 1
+        url: http://tempo.telemetry.svc.cluster.local:3100
+        basicAuth: false
+        isDefault: false
+        editable: true
+      - name: Loki
+        type: loki
+        uid: loki
+        access: proxy
+        orgId: 1
+        url: http://loki.telemetry.svc.cluster.local:3100
+        basicAuth: false
+        isDefault: false
+        editable: true

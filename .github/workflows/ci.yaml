@@ -1,0 +1,24 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Shell syntax
+      run: bash -n cost-based-semantic-routing/demo.sh
+    - name: ShellCheck
+      run: shellcheck cost-based-semantic-routing/demo.sh
+    - name: Python syntax
+      run: |
+        python3 -m py_compile \
+          cost-based-semantic-routing/scripts/prometheus_report.py \
+          cost-based-semantic-routing/scripts/validate_results.py

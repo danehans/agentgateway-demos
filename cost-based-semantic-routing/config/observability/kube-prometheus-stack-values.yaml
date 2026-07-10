@@ -1,0 +1,32 @@
+alertmanager:
+  enabled: false
+
+prometheus:
+  prometheusSpec:
+    ruleSelectorNilUsesHelmValues: false
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+    enableFeatures:
+    - native-histograms
+    enableRemoteWriteReceiver: true
+
+grafana:
+  enabled: true
+  defaultDashboardsEnabled: true
+  datasources:
+    datasources.yaml:
+      apiVersion: 1
+      datasources:
+      - name: Prometheus
+        type: prometheus
+        uid: prometheus
+        access: proxy
+        orgId: 1
+        url: http://kube-prometheus-stack-prometheus.telemetry:9090
+        basicAuth: false
+        editable: true
+        jsonData:
+          httpMethod: GET
+          exemplarTraceIdDestinations:
+          - name: trace_id
+            datasourceUid: tempo

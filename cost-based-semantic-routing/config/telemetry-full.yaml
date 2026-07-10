@@ -1,0 +1,64 @@
+apiVersion: gateway.networking.k8s.io/v1beta1
+kind: ReferenceGrant
+metadata:
+  name: allow-agentgateway-telemetry
+  namespace: telemetry
+spec:
+  from:
+  - group: agentgateway.dev
+    kind: AgentgatewayPolicy
+    namespace: agentgateway-system
+  to:
+  - group: ""
+    kind: Service
+---
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayPolicy
+metadata:
+  name: semantic-routing-telemetry
+  namespace: agentgateway-system
+spec:
+  targetRefs:
+  - group: gateway.networking.k8s.io
+    kind: Gateway
+    name: agentgateway-proxy
+  frontend:
+    metrics:
+      attributes:
+        add:
+        - name: eval_lane
+          expression: 'request.headers["x-eval-lane"]'
+    accessLog:
+      attributes:
+        add:
+        - name: eval.id
+          expression: 'request.headers["x-eval-id"]'
+        - name: eval.lane
+          expression: 'request.headers["x-eval-lane"]'
+      otlp:
+        protocol: GRPC
+        backendRef:
+          group: ""
+          kind: Service
+          name: opentelemetry-collector-logs
+          namespace: telemetry
+          port: 4317
+    tracing:
+      protocol: GRPC
+      backendRef:
+        group: ""
+        kind: Service
+        name: opentelemetry-collector-traces
+        namespace: telemetry
+        port: 4317
+      clientSampling: "true"
+      randomSampling: "true"
+      attributes:
+        add:
+        - name: eval.id
+          expression: 'request.headers["x-eval-id"]'
+        - name: eval.lane
+          expression: 'request.headers["x-eval-lane"]'
+      resources:
+      - name: deployment.environment.name
+        expression: '"semantic-routing-demo"'

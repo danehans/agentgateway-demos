@@ -1,0 +1,6 @@
+.work/
+cost-based-semantic-routing/results/*
+!cost-based-semantic-routing/results/.gitkeep
+__pycache__/
+*.pyc
+.DS_Store

@@ -143,7 +143,7 @@ Use a commit SHA instead of the moving PR ref for a reproducible publication
 run:
 
 ```bash
-EXAMPLE_REF=1de2d4d5f2dea807581fe4d3178a3a4cbfc5711c ./demo.sh refresh
+EXAMPLE_REF=9fe0326b4a6dcc69e889f171f50a3855529f4847 ./demo.sh refresh
 ```
 
 ## Commands

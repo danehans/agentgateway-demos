@@ -39,9 +39,7 @@ def build_summary(args):
 
 def render_summary(summary, local_text, prometheus_text):
     prometheus = summary["prometheus"]
-    prometheus_heading = "Catalog-backed Prometheus summary"
-    if prometheus["report"] and prometheus["report"].get("window"):
-        prometheus_heading += f" ({prometheus['report']['window']} window)"
+    prometheus_heading = "Catalog-backed Prometheus summary (experiment-scoped)"
     lines = [
         "Semantic routing experiment summary",
         f"run_id={summary['run_id']}",

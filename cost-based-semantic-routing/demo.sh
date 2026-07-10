@@ -25,7 +25,6 @@ EVAL_LIMIT="${EVAL_LIMIT:-20}"
 SMOKE_LIMIT="${SMOKE_LIMIT:-2}"
 EVAL_DELAY_SEC="${EVAL_DELAY_SEC:-1}"
 CAPTURE_OUTPUT="${CAPTURE_OUTPUT:-false}"
-PROMETHEUS_WINDOW="${PROMETHEUS_WINDOW:-30m}"
 VERIFY_TIMEOUT_SEC="${VERIFY_TIMEOUT_SEC:-300}"
 VERIFY_INTERVAL_SEC="${VERIFY_INTERVAL_SEC:-5}"
 VSR_READY_TIMEOUT_SEC="${VSR_READY_TIMEOUT_SEC:-1200}"
@@ -191,12 +190,11 @@ verify_tcp_service() {
 generate_prometheus_report() {
   python3 "${ROOT_DIR}/scripts/prometheus_report.py" \
     --url "$1" \
-    --window "$2" \
-    --experiment-id "$3" \
-    --catalog "$4" \
-    --expected-requests "$5" \
-    --json-output "$6" \
-    >"$7"
+    --experiment-id "$2" \
+    --catalog "$3" \
+    --results "$4" \
+    --json-output "$5" \
+    >"$6"
 }
 
 usage() {
@@ -585,13 +583,12 @@ verify_request_observability() {
 }
 
 verify_llm_observability() {
-  local experiment_id="$1" result_file="$2" pid url selector expected_requests
+  local experiment_id="$1" result_file="$2" pid url selector
   local smoke_json smoke_text
   [[ "${OBSERVABILITY_PROFILE}" != "none" ]] || return
   selector="namespace=\"${NAMESPACE}\",gateway=\"${NAMESPACE}/agentgateway-proxy\",experiment_id=\"${experiment_id}\""
   smoke_json="${WORK_DIR}/${experiment_id}-prometheus-summary.json"
   smoke_text="${WORK_DIR}/${experiment_id}-prometheus-summary.txt"
-  expected_requests="$(wc -l < "${result_file}" | tr -d ' ')"
   start_port_forward "${TELEMETRY_NAMESPACE}" \
     service/kube-prometheus-stack-prometheus 9090 prometheus-llm-signals
   pid="${PORT_FORWARD_PID}"
@@ -599,8 +596,8 @@ verify_llm_observability() {
   retry_until "nonzero catalog-priced cost from agentgateway token metrics" \
     "${SIGNAL_TIMEOUT_SEC}" "${VERIFY_INTERVAL_SEC}" \
     generate_prometheus_report \
-      "${url}" "${PROMETHEUS_WINDOW}" "${experiment_id}" \
-      "${WORK_DIR}/catalog.json" "${expected_requests}" \
+      "${url}" "${experiment_id}" "${WORK_DIR}/catalog.json" \
+      "${result_file}" \
       "${smoke_json}" "${smoke_text}"
   retry_until "exact agentgateway model catalog lookups" \
     "${SIGNAL_TIMEOUT_SEC}" "${VERIFY_INTERVAL_SEC}" \
@@ -1178,7 +1175,7 @@ cmd_report() {
   preflight
   use_cluster
   fetch_example
-  local result_file result_base summary_json summary_text experiment_id expected_requests
+  local result_file result_base summary_json summary_text experiment_id
   local local_json local_text prometheus_json prometheus_text ratings_file
   local port_forward_pid prometheus_status prometheus_reason prometheus_url
   local summary_args=() ratings_args=()
@@ -1201,7 +1198,6 @@ with open(sys.argv[1], encoding="utf-8") as stream:
             break
 ' "${result_file}")"
   [[ -n "${experiment_id}" ]] || die "result file does not contain a run_id: ${result_file}"
-  expected_requests="$(wc -l < "${result_file}" | tr -d ' ')"
   python3 "${EXAMPLE_DIR}/scripts/summarize_results.py" --help \
     | grep -Fq -- '--json-output' \
     || die "the fetched example predates persisted summaries; run ./demo.sh refresh --yes"
@@ -1236,9 +1232,8 @@ with open(sys.argv[1], encoding="utf-8") as stream:
     retry_until "catalog-backed Prometheus report" \
       "${SIGNAL_TIMEOUT_SEC}" "${VERIFY_INTERVAL_SEC}" \
       generate_prometheus_report \
-        "${prometheus_url}" "${PROMETHEUS_WINDOW}" "${experiment_id}" \
-        "${WORK_DIR}/catalog.json" \
-        "${expected_requests}" \
+        "${prometheus_url}" "${experiment_id}" \
+        "${WORK_DIR}/catalog.json" "${result_file}" \
         "${prometheus_json}" "${prometheus_text}"
     prometheus_status=collected
     prometheus_reason=""

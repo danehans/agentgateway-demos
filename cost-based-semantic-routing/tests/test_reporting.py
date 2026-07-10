@@ -82,13 +82,34 @@ class PrometheusReportTest(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             catalog_path = Path(directory) / "catalog.json"
+            results_path = Path(directory) / "results.jsonl"
             catalog_path.write_text(json.dumps(catalog), encoding="utf-8")
+            results_path.write_text(
+                "\n".join(
+                    json.dumps({
+                        "run_id": "test-run",
+                        "timestamp": f"2026-07-10T19:20:0{second}+00:00",
+                        "latency_ms": 1000,
+                    })
+                    for second in (1, 2, 3)
+                ) + "\n",
+                encoding="utf-8",
+            )
             report = prometheus_report.build_report(
-                "http://prometheus", "30m", "test-run", catalog_path, 3
+                "http://prometheus", "test-run", catalog_path, results_path
             )
 
-        self.assertEqual(report["window"], "30m")
+        self.assertEqual(report["scope"], "experiment")
         self.assertEqual(report["experiment_id"], "test-run")
+        self.assertEqual(report["expected_requests"], 3)
+        self.assertEqual(report["observed_catalog_lookups"], 3)
+        self.assertEqual(
+            report["experiment_started_at"], "2026-07-10T19:20:00+00:00"
+        )
+        self.assertEqual(
+            report["experiment_ended_at"], "2026-07-10T19:20:03+00:00"
+        )
+        self.assertNotIn("window", report)
         expensive = next(
             row
             for row in report["catalog_backed_realized_cost_by_lane"]
@@ -125,15 +146,32 @@ class PrometheusReportTest(unittest.TestCase):
         self.addCleanup(setattr, prometheus_report, "query", original_query)
         with tempfile.TemporaryDirectory() as directory:
             catalog_path = Path(directory) / "catalog.json"
+            results_path = Path(directory) / "results.jsonl"
             catalog_path.write_text(json.dumps({
                 "providers": {"openai": {"models": {
                     "gpt-5.5": {"rates": {"input": "5"}}
                 }}}
             }), encoding="utf-8")
+            results_path.write_text(json.dumps({
+                "run_id": "test-run",
+                "timestamp": "2026-07-10T19:20:01+00:00",
+                "latency_ms": 500,
+            }) + "\n", encoding="utf-8")
             with self.assertRaisesRegex(RuntimeError, "missing evaluation lanes"):
                 prometheus_report.build_report(
-                    "http://prometheus", "30m", "test-run", catalog_path, 1
+                    "http://prometheus", "test-run", catalog_path, results_path
                 )
+
+    def test_rejects_result_rows_from_another_experiment(self):
+        with tempfile.TemporaryDirectory() as directory:
+            results_path = Path(directory) / "results.jsonl"
+            results_path.write_text(json.dumps({
+                "run_id": "another-run",
+                "timestamp": "2026-07-10T19:20:01+00:00",
+                "latency_ms": 500,
+            }) + "\n", encoding="utf-8")
+            with self.assertRaisesRegex(RuntimeError, "do not match experiment"):
+                prometheus_report.load_result_metadata(results_path, "test-run")
 
 
 class AssembleSummaryTest(unittest.TestCase):
@@ -148,7 +186,9 @@ class AssembleSummaryTest(unittest.TestCase):
             results.write_text(json.dumps({"run_id": "test-run"}) + "\n", encoding="utf-8")
             local_json.write_text(json.dumps({"routing": {"accuracy": 0.9}}), encoding="utf-8")
             local_text.write_text("Routing accuracy: 90.0%\n", encoding="utf-8")
-            prometheus_json.write_text(json.dumps({"window": "30m"}), encoding="utf-8")
+            prometheus_json.write_text(
+                json.dumps({"scope": "experiment"}), encoding="utf-8"
+            )
             prometheus_text.write_text("Catalog cost: 0.12500000\n", encoding="utf-8")
             args = SimpleNamespace(
                 results=str(results),
@@ -167,7 +207,9 @@ class AssembleSummaryTest(unittest.TestCase):
 
             self.assertEqual(summary["run_id"], "test-run")
             self.assertEqual(summary["prometheus"]["status"], "collected")
-            self.assertIn("Catalog-backed Prometheus summary (30m window)", rendered)
+            self.assertIn(
+                "Catalog-backed Prometheus summary (experiment-scoped)", rendered
+            )
             self.assertIn("Routing accuracy: 90.0%", rendered)
 
 

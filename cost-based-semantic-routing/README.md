@@ -196,12 +196,13 @@ Results are written to `results/`:
 - `<RUN_ID>-summary.txt`: readable cost, accuracy, satisfaction, and latency report
 
 The local summary estimates cost from response token usage and the example's
-rate table. The Prometheus summary scopes agentgateway token metrics to the run,
-prices them with the generated model catalog, and requires every catalog lookup
-to be `Exact`. Report generation waits until the lookup count covers every
-result row, preventing a partial scrape from understating cost. Agentgateway's
-access logs and traces provide the independent per-request realized-cost
-signal. Treat the catalog-priced Prometheus summary
+rate table. The experiment-scoped Prometheus summary uses the run's unique
+experiment ID, records the first and last request timestamps, prices
+agentgateway token metrics with the generated model catalog, and requires every
+catalog lookup to be `Exact`. Report generation waits until the lookup count
+covers every result row, preventing a partial scrape from understating cost.
+Agentgateway's access logs and traces provide the independent per-request
+realized-cost signal. Treat the catalog-priced Prometheus summary
 as the experiment's cost source of record. `./demo.sh report` regenerates both
 summary artifacts for `results/<RUN_ID>.jsonl`, or for `RESULT_FILE` when it is
 set. When Prometheus is disabled or unavailable, that status and reason are

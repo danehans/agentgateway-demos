@@ -5,6 +5,7 @@ import os
 import urllib.parse
 import urllib.request
 from collections import defaultdict
+from datetime import datetime, timedelta
 
 
 EXPECTED_LANES = {"routed", "always_low_cost", "always_expensive"}
@@ -43,6 +44,36 @@ def normalize_vector(rows, label_order, value_name):
 def load_catalog(path):
     with open(path, encoding="utf-8") as stream:
         return json.load(stream)
+
+
+def load_result_metadata(path, experiment_id):
+    rows = []
+    with open(path, encoding="utf-8") as stream:
+        rows = [json.loads(line) for line in stream if line.strip()]
+    if not rows:
+        raise RuntimeError(f"result file is empty: {path}")
+    run_ids = {row.get("run_id") for row in rows}
+    if run_ids != {experiment_id}:
+        raise RuntimeError(
+            f"result run IDs {sorted(str(value) for value in run_ids)} "
+            f"do not match experiment {experiment_id}"
+        )
+    requests = []
+    for row in rows:
+        timestamp = row.get("timestamp")
+        latency_ms = row.get("latency_ms")
+        if not timestamp or latency_ms is None:
+            raise RuntimeError(
+                f"result file contains rows without timestamps or latency: {path}"
+            )
+        completed_at = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+        started_at = completed_at - timedelta(milliseconds=float(latency_ms))
+        requests.append((started_at, completed_at))
+    return {
+        "expected_requests": len(rows),
+        "started_at": min(started for started, _ in requests).isoformat(),
+        "ended_at": max(completed for _, completed in requests).isoformat(),
+    }
 
 
 def find_model(catalog, request_model, response_model):
@@ -122,7 +153,9 @@ def calculate_costs(rows, catalog):
     return lane_costs, by_model
 
 
-def build_report(base_url, window, experiment_id, catalog_path, expected_requests):
+def build_report(base_url, experiment_id, catalog_path, results_path):
+    result_metadata = load_result_metadata(results_path, experiment_id)
+    expected_requests = result_metadata["expected_requests"]
     selector = (
         'namespace="agentgateway-system",'
         'gateway="agentgateway-system/agentgateway-proxy",'
@@ -166,8 +199,10 @@ def build_report(base_url, window, experiment_id, catalog_path, expected_request
         raise RuntimeError(f"catalog-priced token cost is zero for {experiment_id}")
 
     return {
-        "window": window,
+        "scope": "experiment",
         "experiment_id": experiment_id,
+        "experiment_started_at": result_metadata["started_at"],
+        "experiment_ended_at": result_metadata["ended_at"],
         "expected_requests": expected_requests,
         "observed_catalog_lookups": observed_lookups,
         "cost_source": "agentgateway token metrics priced with the loaded model catalog",
@@ -207,7 +242,14 @@ def render_report(report):
         "gen_ai_response_model",
     ]
     lane_cost = report["catalog_backed_realized_cost_by_lane"]
-    lines = [f"Experiment: {report['experiment_id']}", f"Cost source: {report['cost_source']}"]
+    lines = [
+        f"Scope: {report['scope']}",
+        f"Experiment: {report['experiment_id']}",
+        f"Requests observed: {report['observed_catalog_lookups']:g}/{report['expected_requests']}",
+        f"Started: {report['experiment_started_at']}",
+        f"Ended: {report['experiment_ended_at']}",
+        f"Cost source: {report['cost_source']}",
+    ]
     lines.extend(render_vector(
         "Catalog-priced realized cost by lane (USD)",
         lane_cost,
@@ -239,19 +281,17 @@ def write_json(path, report):
 def main():
     parser = argparse.ArgumentParser(description="Query agentgateway eval metrics from Prometheus.")
     parser.add_argument("--url", default="http://127.0.0.1:19090")
-    parser.add_argument("--window", default="30m")
     parser.add_argument("--experiment-id", required=True)
     parser.add_argument("--catalog", required=True)
-    parser.add_argument("--expected-requests", type=int, required=True)
+    parser.add_argument("--results", required=True)
     parser.add_argument("--json-output", default="", help="Write the report as JSON.")
     args = parser.parse_args()
 
     report = build_report(
         args.url,
-        args.window,
         args.experiment_id,
         args.catalog,
-        args.expected_requests,
+        args.results,
     )
     if args.json_output:
         write_json(args.json_output, report)

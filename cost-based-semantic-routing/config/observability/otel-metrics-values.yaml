@@ -15,13 +15,6 @@ clusterRole:
     resources: [pods, nodes]
     verbs: [get, list, watch]
 
-ports:
-  promexporter:
-    enabled: true
-    containerPort: 9099
-    servicePort: 9099
-    protocol: TCP
-
 config:
   exporters:
     debug:

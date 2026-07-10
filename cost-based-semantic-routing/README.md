@@ -85,6 +85,40 @@ known failures.
 9. Sends every selected corpus prompt through `routed`, `always_low_cost`, and
    `always_expensive`, then summarizes cost, accuracy, and latency.
 
+Every phase is gated by a post-install check. The script stops at the first
+component that remains unhealthy after its retry window:
+
+| Phase | Required checks |
+|---|---|
+| kind and MetalLB | Kubernetes readiness, storage class, controller and speaker rollout, address-pool configuration |
+| agentgateway | Gateway API and agentgateway CRDs, controller rollout, accepted GatewayClass, programmed proxy, successful catalog mount/load, and LoadBalancer HTTP access |
+| OpenAI and catalog | authenticated `/v1/models` access, Kubernetes Secret, ConfigMap, and priced catalog entries for every eval model |
+| vSR | deployment rollout, bound model-cache PVC, `/ready`, `/config/router`, ExtProc gRPC connectivity, and `/metrics` |
+| Metrics stack | Prometheus and Grafana rollouts, PromQL execution, Grafana datasource health, OTel scrape/remote-write pipeline, and dashboard discovery |
+| Full OTel stack | Loki and Tempo readiness, log and trace collector connectivity, Loki datasource health, and Tempo datasource configuration |
+| Immediate probe | streamed ExtProc response plus agentgateway request/latency metrics and correlated Loki/Tempo records |
+| Paid smoke | nonzero catalog-priced cost derived from token metrics, exact catalog-lookup counters, token and LLM-duration metrics, all three experiment lanes, and cost-bearing correlated logs/traces |
+
+The standalone `verify` and `eval` commands repeat the deployed-stack checks
+before probing or sending paid traffic. This catches components that became
+unhealthy after the original setup completed.
+
+Port-forward checks use temporary free local ports and are cleaned up on exit.
+Failed checks are retried without flooding the terminal; the final diagnostic is
+printed from `.work/cost-based-semantic-routing/last-verification.log`.
+
+The default timeout is five minutes, vSR receives twenty minutes for model
+downloads, and telemetry signals receive three minutes for export and indexing.
+Tune these windows for slower environments:
+
+```bash
+VERIFY_TIMEOUT_SEC=600 \
+VSR_READY_TIMEOUT_SEC=1800 \
+SIGNAL_TIMEOUT_SEC=300 \
+VERIFY_INTERVAL_SEC=5 \
+./demo.sh all
+```
+
 The wrapper intentionally does not copy the PR's routing configuration or eval
 logic. It runs these files from the fetched revision:
 
@@ -109,7 +143,7 @@ Use a commit SHA instead of the moving PR ref for a reproducible publication
 run:
 
 ```bash
-EXAMPLE_REF=e7b5a567b5a5cc7287ef6fe3e9d7aa1d98275b33 ./demo.sh refresh
+EXAMPLE_REF=1de2d4d5f2dea807581fe4d3178a3a4cbfc5711c ./demo.sh refresh
 ```
 
 ## Commands
@@ -149,8 +183,9 @@ agentgateway's catalog-backed Prometheus cost report is unavailable.
 | `always_expensive` | Higher-capability model is forced | Savings counterfactual |
 
 The runner randomizes prompt/lane order and adds request, experiment, eval, and
-lane identifiers. Agentgateway adds `eval_lane` to Prometheus metrics and sends
-the identifiers to access logs and traces when the full profile is enabled.
+lane identifiers. Agentgateway adds `experiment_id` and `eval_lane` to
+Prometheus metrics and sends the identifiers to access logs and traces when the
+full profile is enabled.
 
 Results are written to `results/`:
 
@@ -160,12 +195,17 @@ Results are written to `results/`:
 - `<RUN_ID>-summary.json`: structured local and catalog-backed Prometheus results
 - `<RUN_ID>-summary.txt`: readable cost, accuracy, satisfaction, and latency report
 
-The local summary estimates cost from response token usage. The Prometheus
-summary reports agentgateway's catalog-backed realized cost and catalog lookup
-status; treat that as the cost source of record. `./demo.sh report` regenerates
-both summary artifacts for `results/<RUN_ID>.jsonl`, or for `RESULT_FILE` when
-it is set. When Prometheus is disabled or unavailable, that status and reason
-are preserved in both artifacts instead of silently omitting the section.
+The local summary estimates cost from response token usage and the example's
+rate table. The Prometheus summary scopes agentgateway token metrics to the run,
+prices them with the generated model catalog, and requires every catalog lookup
+to be `Exact`. Report generation waits until the lookup count covers every
+result row, preventing a partial scrape from understating cost. Agentgateway's
+access logs and traces provide the independent per-request realized-cost
+signal. Treat the catalog-priced Prometheus summary
+as the experiment's cost source of record. `./demo.sh report` regenerates both
+summary artifacts for `results/<RUN_ID>.jsonl`, or for `RESULT_FILE` when it is
+set. When Prometheus is disabled or unavailable, that status and reason are
+preserved in both artifacts instead of silently omitting the section.
 Existing demo checkouts that fetched an older PR revision must run
 `./demo.sh refresh --yes` once to obtain structured-summary support.
 

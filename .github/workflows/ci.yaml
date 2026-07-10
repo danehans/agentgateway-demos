@@ -27,6 +27,7 @@ jobs:
         python3 -m py_compile \
           cost-based-semantic-routing/scripts/assemble_summary.py \
           cost-based-semantic-routing/scripts/prometheus_report.py \
-          cost-based-semantic-routing/scripts/validate_results.py
+          cost-based-semantic-routing/scripts/validate_results.py \
+          cost-based-semantic-routing/scripts/verify_observability.py
     - name: Reporting tests
       run: python3 -m unittest discover -s cost-based-semantic-routing/tests

@@ -28,9 +28,13 @@ spec:
         add:
         - name: eval_lane
           expression: 'request.headers["x-eval-lane"]'
+        - name: experiment_id
+          expression: 'request.headers["x-experiment-id"]'
     accessLog:
       attributes:
         add:
+        - name: experiment.id
+          expression: 'request.headers["x-experiment-id"]'
         - name: eval.id
           expression: 'request.headers["x-eval-id"]'
         - name: eval.lane
@@ -55,6 +59,8 @@ spec:
       randomSampling: "true"
       attributes:
         add:
+        - name: experiment.id
+          expression: 'request.headers["x-experiment-id"]'
         - name: eval.id
           expression: 'request.headers["x-eval-id"]'
         - name: eval.lane

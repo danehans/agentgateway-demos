@@ -4,11 +4,29 @@ metadata:
   name: semantic-routing
   namespace: agentgateway-system
 spec:
+  env:
+  - name: MODEL_CATALOG_PATHS
+    value: /etc/agentgateway/model-catalog/semantic-routing-model-costs.json
   modelCatalog:
     sources:
     - configMap:
         name: semantic-routing-model-costs
         key: catalog.json
+  deployment:
+    spec:
+      template:
+        spec:
+          containers:
+          - name: agentgateway
+            volumeMounts:
+            # agentgateway 1.3.1 renders an invalid catalog mount. Remove it
+            # until the corrected /etc mount ships in a stable release.
+            - mountPath: /config/model-catalog/semantic-routing-model-costs.json
+              $patch: delete
+            - name: model-catalog-semantic-routing-model-costs
+              mountPath: /etc/agentgateway/model-catalog/semantic-routing-model-costs.json
+              subPath: semantic-routing-model-costs.json
+              readOnly: true
 ---
 apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway

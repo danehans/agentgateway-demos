@@ -102,7 +102,7 @@ Use a commit SHA instead of the moving PR ref for a reproducible publication
 run:
 
 ```bash
-EXAMPLE_REF=bbded934474be36d945aedbc616de64e72d2405f ./demo.sh refresh
+EXAMPLE_REF=31aeed6a4148ca49ac2018f40104bbf09d38ca2d ./demo.sh refresh
 ```
 
 ## Commands
@@ -111,7 +111,7 @@ EXAMPLE_REF=bbded934474be36d945aedbc616de64e72d2405f ./demo.sh refresh
 ./demo.sh setup       # Install the cluster components without paid traffic
 ./demo.sh verify      # Test streamed ExtProc without calling OpenAI
 ./demo.sh eval        # Run the paid smoke test and experiment
-./demo.sh report      # Reprint local and Prometheus summaries
+./demo.sh report      # Regenerate local and Prometheus summary artifacts
 ./demo.sh status      # Inspect resources and the resolved PR revision
 ./demo.sh dashboard   # Open a Grafana port-forward on localhost:3000
 ./demo.sh cleanup     # Delete the dedicated cluster
@@ -150,10 +150,17 @@ Results are written to `results/`:
 - `<RUN_ID>.jsonl`: request-level decisions, usage, cost estimate, and latency
 - `<RUN_ID>-metadata.json`: component versions and resolved example SHA
 - `<RUN_ID>-ratings.csv`: created when `CAPTURE_OUTPUT=true`
+- `<RUN_ID>-summary.json`: structured local and catalog-backed Prometheus results
+- `<RUN_ID>-summary.txt`: readable cost, accuracy, satisfaction, and latency report
 
 The local summary estimates cost from response token usage. The Prometheus
 summary reports agentgateway's catalog-backed realized cost and catalog lookup
-status; treat that as the cost source of record.
+status; treat that as the cost source of record. `./demo.sh report` regenerates
+both summary artifacts for `results/<RUN_ID>.jsonl`, or for `RESULT_FILE` when
+it is set. When Prometheus is disabled or unavailable, that status and reason
+are preserved in both artifacts instead of silently omitting the section.
+Existing demo checkouts that fetched an older PR revision must run
+`./demo.sh refresh --yes` once to obtain structured-summary support.
 
 ## Tune the routing policy
 
@@ -191,13 +198,16 @@ CAPTURE_OUTPUT=true ./demo.sh eval
 ```
 
 Fill in the generated ratings CSV with a satisfaction score and whether the
-router chose the right model. Then pass it to the upstream summarizer:
+router chose the right model. Then regenerate the persisted summaries; the
+ratings file is detected automatically:
 
 ```bash
-python3 ../.work/cost-based-semantic-routing/agentgateway/examples/llm-semantic-routing/scripts/summarize_results.py \
-  results/<RUN_ID>.jsonl \
-  --ratings results/<RUN_ID>-ratings.csv
+RESULT_FILE=results/<RUN_ID>.jsonl ./demo.sh report
 ```
+
+`CAPTURE_OUTPUT=true` stores response text in the request-level JSONL and
+creates the ratings CSV. It does not redirect the command's terminal output;
+the `-summary.json` and `-summary.txt` files are created independently.
 
 ## Model availability
 

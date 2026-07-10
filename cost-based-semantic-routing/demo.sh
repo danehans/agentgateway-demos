@@ -59,7 +59,7 @@ Commands:
   setup      Create the cluster and install agentgateway, observability, and vSR
   verify     Run the zero-token immediate-response ExtProc probe
   eval       Run a paid smoke test, the three-lane corpus, and a result summary
-  report     Reprint the latest local and Prometheus result summaries
+  report     Regenerate the latest text and JSON result summaries
   router     Redeploy vSR and experiment resources after tuning the fetched config
   refresh    Replace the fetched PR #2486 checkout with EXAMPLE_REF
   status     Show the deployed resources and resolved example revision
@@ -588,7 +588,10 @@ cmd_report() {
   preflight
   use_cluster
   fetch_example
-  local result_file port_forward_pid ready attempt
+  local result_file result_base summary_json summary_text
+  local local_json local_text prometheus_json prometheus_text ratings_file
+  local port_forward_pid ready attempt prometheus_status prometheus_reason
+  local summary_args=() ratings_args=()
   if [[ -n "${RESULT_FILE:-}" ]]; then
     result_file="${RESULT_FILE}"
   elif [[ -f "${RESULTS_DIR}/latest-result" ]]; then
@@ -597,37 +600,89 @@ cmd_report() {
     die "no result file found; run ./demo.sh eval or set RESULT_FILE"
   fi
   [[ -f "${result_file}" ]] || die "result file does not exist: ${result_file}"
+  python3 "${EXAMPLE_DIR}/scripts/summarize_results.py" --help \
+    | grep -Fq -- '--json-output' \
+    || die "the fetched example predates persisted summaries; run ./demo.sh refresh --yes"
 
-  log "Local evaluation summary"
-  python3 "${EXAMPLE_DIR}/scripts/summarize_results.py" "${result_file}"
+  result_base="${result_file%.jsonl}"
+  summary_json="${result_base}-summary.json"
+  summary_text="${result_base}-summary.txt"
+  local_json="${WORK_DIR}/$(basename "${result_base}")-local-summary.json"
+  local_text="${WORK_DIR}/$(basename "${result_base}")-local-summary.txt"
+  prometheus_json="${WORK_DIR}/$(basename "${result_base}")-prometheus-summary.json"
+  prometheus_text="${WORK_DIR}/$(basename "${result_base}")-prometheus-summary.txt"
+  ratings_file="${result_base}-ratings.csv"
+  rm -f "${prometheus_json}" "${prometheus_text}"
 
-  if [[ "${OBSERVABILITY_PROFILE}" == "none" ]]; then
-    return
+  if [[ -f "${ratings_file}" ]]; then
+    ratings_args+=(--ratings "${ratings_file}")
   fi
+  python3 "${EXAMPLE_DIR}/scripts/summarize_results.py" \
+    "${result_file}" \
+    --json-output "${local_json}" \
+    --text-output "${local_text}" \
+    "${ratings_args[@]}" \
+    >/dev/null
 
-  log "Catalog-backed Prometheus summary (${PROMETHEUS_WINDOW} window)"
-  kubectl port-forward \
-    --namespace "${TELEMETRY_NAMESPACE}" \
-    service/kube-prometheus-stack-prometheus \
-    "${PROMETHEUS_PORT}:9090" >"${WORK_DIR}/prometheus-port-forward.log" 2>&1 &
-  port_forward_pid=$!
-  ready=false
-  for attempt in $(seq 1 30); do
-    if curl -fsS "http://127.0.0.1:${PROMETHEUS_PORT}/-/ready" >/dev/null 2>&1; then
-      ready=true
-      break
+  prometheus_status=disabled
+  prometheus_reason="observability_profile_none"
+  if [[ "${OBSERVABILITY_PROFILE}" != "none" ]]; then
+    prometheus_status=unavailable
+    prometheus_reason=port_forward_not_ready
+
+    kubectl port-forward \
+      --namespace "${TELEMETRY_NAMESPACE}" \
+      service/kube-prometheus-stack-prometheus \
+      "${PROMETHEUS_PORT}:9090" >"${WORK_DIR}/prometheus-port-forward.log" 2>&1 &
+    port_forward_pid=$!
+    ready=false
+    for attempt in $(seq 1 30); do
+      if curl -fsS "http://127.0.0.1:${PROMETHEUS_PORT}/-/ready" >/dev/null 2>&1; then
+        ready=true
+        break
+      fi
+      sleep 1
+    done
+    if [[ "${ready}" == "true" ]]; then
+      if python3 "${ROOT_DIR}/scripts/prometheus_report.py" \
+        --url "http://127.0.0.1:${PROMETHEUS_PORT}" \
+        --window "${PROMETHEUS_WINDOW}" \
+        --json-output "${prometheus_json}" \
+        >"${prometheus_text}"; then
+        prometheus_status=collected
+        prometheus_reason=""
+      else
+        prometheus_reason=query_failed
+        warn "Prometheus report query failed"
+      fi
+    else
+      warn "Prometheus port-forward did not become ready"
     fi
-    sleep 1
-  done
-  if [[ "${ready}" == "true" ]]; then
-    python3 "${ROOT_DIR}/scripts/prometheus_report.py" \
-      --url "http://127.0.0.1:${PROMETHEUS_PORT}" \
-      --window "${PROMETHEUS_WINDOW}"
-  else
-    warn "Prometheus port-forward did not become ready"
+    kill "${port_forward_pid}" >/dev/null 2>&1 || true
+    wait "${port_forward_pid}" 2>/dev/null || true
   fi
-  kill "${port_forward_pid}" >/dev/null 2>&1 || true
-  wait "${port_forward_pid}" 2>/dev/null || true
+
+  summary_args=(
+    --results "${result_file}"
+    --local-json "${local_json}"
+    --local-text "${local_text}"
+    --prometheus-status "${prometheus_status}"
+    --prometheus-reason "${prometheus_reason}"
+    --output-json "${summary_json}"
+    --output-text "${summary_text}"
+  )
+  if [[ "${prometheus_status}" == "collected" ]]; then
+    summary_args+=(
+      --prometheus-json "${prometheus_json}"
+      --prometheus-text "${prometheus_text}"
+    )
+  fi
+  python3 "${ROOT_DIR}/scripts/assemble_summary.py" "${summary_args[@]}"
+
+  log "Experiment summary"
+  cat "${summary_text}"
+  printf 'JSON summary: %s\n' "${summary_json}"
+  printf 'Text summary: %s\n' "${summary_text}"
 }
 
 cmd_router() {

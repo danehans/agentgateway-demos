@@ -24,7 +24,7 @@ if [[ -z "${OBSERVABILITY_PROFILE:-}" && -f "${WORK_DIR}/observability-profile" 
   OBSERVABILITY_PROFILE="$(cat "${WORK_DIR}/observability-profile")"
 fi
 OBSERVABILITY_PROFILE="${OBSERVABILITY_PROFILE:-full}"
-EVAL_LIMIT="${EVAL_LIMIT:-20}"
+EVAL_LIMIT="${EVAL_LIMIT:-0}"
 SMOKE_LIMIT="${SMOKE_LIMIT:-2}"
 EVAL_DELAY_SEC="${EVAL_DELAY_SEC:-1}"
 CAPTURE_OUTPUT="${CAPTURE_OUTPUT:-false}"
@@ -259,7 +259,7 @@ Important environment variables:
   OPENAI_API_KEY          Required by setup and all; not written to local files
   HF_TOKEN                Optional; raises Hugging Face download rate limits
   OBSERVABILITY_PROFILE   full (default), metrics, or none
-  EVAL_LIMIT              Corpus rows to run; defaults to 20 (60 requests)
+  EVAL_LIMIT              Corpus rows to run; defaults to all 28 (84 requests)
   CAPTURE_OUTPUT          true to save model responses for satisfaction scoring
   SUMMARY_FILE             Summary JSON used by chart; defaults to the latest run
   EXAMPLE_REF             Defaults to main; use a SHA to pin upstream configuration

@@ -320,6 +320,23 @@ class EvaluationToolingTest(unittest.TestCase):
             "gpt-cheap",
         )
 
+    def test_default_corpus_is_balanced(self):
+        corpus = DEMO_DIR / "data" / "eval-corpus.jsonl"
+        rows = [
+            json.loads(line)
+            for line in corpus.read_text(encoding="utf-8").splitlines()
+            if line
+        ]
+
+        self.assertEqual(len(rows), 200)
+        self.assertEqual(len({row["id"] for row in rows}), len(rows))
+        self.assertEqual(
+            sum(row["expected_model"] == "gpt-5.4-nano" for row in rows), 100
+        )
+        self.assertEqual(
+            sum(row["expected_model"] == "gpt-5.5" for row in rows), 100
+        )
+
     def test_summary_uses_catalog_pricing_for_counterfactual(self):
         rows = [
             {

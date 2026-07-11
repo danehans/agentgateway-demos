@@ -68,9 +68,10 @@ The dedicated cluster always uses the `agentgateway-system` and `telemetry`
 namespaces. The script intentionally ignores generic `NAMESPACE` and
 `TELEMETRY_NAMESPACE` variables inherited from another Kubernetes workflow.
 
-The default evaluation uses all 28 prompts in its single corpus. It first runs
-a two-prompt smoke test and stops if either model is unavailable, preventing a
-full run of known failures.
+The default evaluation uses all 200 prompts in its single, balanced corpus. It
+first runs a two-prompt smoke test and stops if either model is unavailable,
+preventing a full run of known failures. Each corpus prompt is sent through the
+three lanes, for 600 billable model requests.
 
 ## What the script does
 

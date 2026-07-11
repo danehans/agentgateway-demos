@@ -259,7 +259,7 @@ Important environment variables:
   OPENAI_API_KEY          Required by setup and all; not written to local files
   HF_TOKEN                Optional; raises Hugging Face download rate limits
   OBSERVABILITY_PROFILE   full (default), metrics, or none
-  EVAL_LIMIT              Corpus rows to run; defaults to all 28 (84 requests)
+  EVAL_LIMIT              Corpus rows to run; defaults to all 200 (600 requests)
   CAPTURE_OUTPUT          true to save model responses for satisfaction scoring
   SUMMARY_FILE             Summary JSON used by chart; defaults to the latest run
   EXAMPLE_REF             Defaults to main; use a SHA to pin upstream configuration

@@ -32,6 +32,7 @@ render_experiment_chart = load_module(
     DEMO_DIR / "scripts" / "render_experiment_chart.py",
 )
 run_eval = load_module("run_eval", DEMO_DIR / "scripts" / "run_eval.py")
+corpus = load_module("corpus", DEMO_DIR / "scripts" / "corpus.py")
 summarize_results = load_module(
     "summarize_results", DEMO_DIR / "scripts" / "summarize_results.py"
 )
@@ -321,21 +322,52 @@ class EvaluationToolingTest(unittest.TestCase):
         )
 
     def test_default_corpus_is_balanced(self):
-        corpus = DEMO_DIR / "data" / "eval-corpus.jsonl"
-        rows = [
+        dataset = DEMO_DIR / "data" / "eval-corpus.jsonl"
+        conversations = [
             json.loads(line)
-            for line in corpus.read_text(encoding="utf-8").splitlines()
+            for line in dataset.read_text(encoding="utf-8").splitlines()
             if line
         ]
+        rows = corpus.load_corpus(dataset)
 
-        self.assertEqual(len(rows), 200)
+        self.assertEqual(len(conversations), 50)
         self.assertEqual(len({row["id"] for row in rows}), len(rows))
+        self.assertEqual(len(rows), 200)
         self.assertEqual(
             sum(row["expected_model"] == "gpt-5.4-nano" for row in rows), 100
         )
         self.assertEqual(
             sum(row["expected_model"] == "gpt-5.5" for row in rows), 100
         )
+        self.assertEqual(
+            {row["language"] for row in rows}, {"go", "rust"}
+        )
+        self.assertEqual(sum(row["language"] == "go" for row in rows), 100)
+        self.assertEqual(sum(row["language"] == "rust" for row in rows), 100)
+        for conversation_item in conversations:
+            self.assertEqual(len(conversation_item["turns"]), 4)
+        for row in rows:
+            self.assertEqual(row["messages"][-1]["role"], "user")
+            self.assertEqual(len(row["messages"]), row["turn"] * 2 - 1)
+        final_turns = [row for row in rows if row["turn"] == 4]
+        self.assertTrue(all(len(row["messages"]) == 7 for row in final_turns))
+
+    def test_evaluator_preserves_corpus_history(self):
+        item = {
+            "id": "conversation-turn-2",
+            "messages": [
+                {"role": "user", "content": "Initial request"},
+                {"role": "assistant", "content": "Initial response"},
+                {"role": "user", "content": "Follow-up request"},
+            ],
+        }
+
+        messages = run_eval.request_messages(
+            SimpleNamespace(system_prompt="System instructions"), item
+        )
+
+        self.assertEqual(messages[0], {"role": "system", "content": "System instructions"})
+        self.assertEqual(messages[1:], item["messages"])
 
     def test_summary_uses_catalog_pricing_for_counterfactual(self):
         rows = [
@@ -393,8 +425,25 @@ class VerifyObservabilityTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             corpus = Path(directory) / "corpus.jsonl"
             corpus.write_text(
-                json.dumps({"expected_model": "gpt-cheap"}) + "\n" +
-                json.dumps({"expected_model": "gpt-expensive"}) + "\n",
+                json.dumps({
+                    "id": "test-conversation",
+                    "language": "go",
+                    "turns": [
+                        {
+                            "family": "routine_go",
+                            "expected_model": "gpt-cheap",
+                            "max_tokens": 100,
+                            "user": "Initial request",
+                            "assistant_context": "Initial response",
+                        },
+                        {
+                            "family": "advanced_go",
+                            "expected_model": "gpt-expensive",
+                            "max_tokens": 100,
+                            "user": "Follow-up request",
+                        },
+                    ],
+                }) + "\n",
                 encoding="utf-8",
             )
 

@@ -68,10 +68,12 @@ The dedicated cluster always uses the `agentgateway-system` and `telemetry`
 namespaces. The script intentionally ignores generic `NAMESPACE` and
 `TELEMETRY_NAMESPACE` variables inherited from another Kubernetes workflow.
 
-The default evaluation uses all 200 prompts in its single, balanced corpus. It
-first runs a two-prompt smoke test and stops if either model is unavailable,
-preventing a full run of known failures. Each corpus prompt is sent through the
-three lanes, for 600 billable model requests.
+The default evaluation replays 50 four-turn Go and Rust developer conversations:
+200 routing decisions in a balanced corpus. Each turn includes its canonical
+prior user and assistant context, so later requests exercise a realistic growing
+transcript. It first runs a two-turn smoke test and stops if either model is
+unavailable, preventing a full run of known failures. Each corpus turn is sent
+through the three lanes, for 600 billable model requests.
 
 ## What the script does
 
@@ -88,7 +90,7 @@ three lanes, for 600 billable model requests.
    configuration and this demo's forced-model baseline lanes.
 8. Verifies streamed ExtProc with an immediate response that consumes no model
    tokens and never reaches OpenAI.
-9. Sends every selected corpus prompt through `routed`, `always_low_cost`, and
+9. Sends every selected corpus turn through `routed`, `always_low_cost`, and
    `always_expensive`, then summarizes cost, accuracy, and latency.
 
 Every phase is gated by a post-install check. The script stops at the first

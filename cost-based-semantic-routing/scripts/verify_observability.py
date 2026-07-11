@@ -4,6 +4,12 @@ import json
 import sys
 import urllib.parse
 import urllib.request
+from pathlib import Path
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+from corpus import expected_models
 
 
 def get_json(base_url, path, params=None):
@@ -50,12 +56,7 @@ def json_contains(payload, expected):
 
 def verify_models(args):
     payload = get_json(args.url, "/config/router")
-    with open(args.corpus, encoding="utf-8") as stream:
-        expected = sorted({
-            json.loads(line).get("expected_model")
-            for line in stream
-            if line.strip()
-        })
+    expected = expected_models(args.corpus)
     missing = [model for model in expected if model and not json_contains(payload, [model])]
     if missing:
         raise ValueError("model API is missing: " + ", ".join(missing))

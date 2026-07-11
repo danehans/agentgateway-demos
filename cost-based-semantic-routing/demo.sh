@@ -259,7 +259,7 @@ Important environment variables:
   OPENAI_API_KEY          Required by setup and all; not written to local files
   HF_TOKEN                Optional; raises Hugging Face download rate limits
   OBSERVABILITY_PROFILE   full (default), metrics, or none
-  EVAL_LIMIT              Corpus rows to run; defaults to all 200 (600 requests)
+  EVAL_LIMIT              Corpus turns to run; defaults to all 200 (600 requests)
   CAPTURE_OUTPUT          true to save model responses for satisfaction scoring
   SUMMARY_FILE             Summary JSON used by chart; defaults to the latest run
   EXAMPLE_REF             Defaults to main; use a SHA to pin upstream configuration
@@ -414,12 +414,10 @@ import sys
 
 with open(sys.argv[1], encoding="utf-8") as stream:
     catalog = json.load(stream)
-with open(sys.argv[2], encoding="utf-8") as stream:
-    expected = {
-        json.loads(line).get("expected_model")
-        for line in stream
-        if line.strip()
-    }
+from pathlib import Path
+sys.path.insert(0, str(Path(sys.argv[2]).parent.parent / "scripts"))
+from corpus import expected_models
+expected = set(expected_models(sys.argv[2]))
 models = catalog.get("providers", {}).get("openai", {}).get("models", {})
 missing = sorted(model for model in expected if model and not models.get(model, {}).get("rates"))
 if missing:
@@ -1220,7 +1218,11 @@ cmd_eval() {
   run_eval_file "${smoke_id}" "${smoke_file}" "${SMOKE_LIMIT}"
   verify_llm_observability "${smoke_id}" "${smoke_file}"
 
-  log "Running ${EVAL_LIMIT} prompts through routed, always_low_cost, and always_expensive"
+  local eval_turns="${EVAL_LIMIT}"
+  if [[ "${EVAL_LIMIT}" == "0" ]]; then
+    eval_turns="all 200 corpus"
+  fi
+  log "Running ${eval_turns} turns through routed, always_low_cost, and always_expensive"
   run_eval_file "${run_id}" "${result_file}" "${EVAL_LIMIT}"
   printf '%s\n' "${result_file}" > "${RESULTS_DIR}/latest-result"
   write_metadata "${run_id}" "${result_file}"

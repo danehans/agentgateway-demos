@@ -99,7 +99,7 @@ def render_chart(summary):
 
     accuracy_width = max(0, min(1, metrics["accuracy"])) * 230
     p50_delta = f"{p50_change:+.1%}"
-    return f'''<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="540" viewBox="0 0 {width} 540" role="img" aria-labelledby="title description">
+    return f'''<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="570" viewBox="0 0 {width} 570" role="img" aria-labelledby="title description">
   <title id="title">Semantic routing experiment results</title>
   <desc id="description">Semantic routing cost, selection accuracy, and latency for run {text(run_id)}.</desc>
   <style>
@@ -113,7 +113,7 @@ def render_chart(summary):
     .metric {{ font-size: 18px; font-weight: 700; }}
     .metric-detail {{ font-size: 13px; fill: #475569; }}
   </style>
-  <rect width="960" height="540" fill="#ffffff"/>
+  <rect width="960" height="570" fill="#ffffff"/>
   <text class="title" x="48" y="46">Semantic routing experiment</text>
   <text class="subtitle" x="48" y="70">Run {text(run_id)} | {text(cost_source)}</text>
   <line x1="48" y1="91" x2="912" y2="91" stroke="#cbd5e1"/>
@@ -146,7 +146,7 @@ def render_chart(summary):
   <text class="metric-detail" x="370" y="496">{metrics['routed_p95']:.2f} s p95 for semantic routing</text>
   <text class="metric-detail" x="370" y="518">Always expensive: {metrics['expensive_p50']:.2f} s p50, {metrics['expensive_p95']:.2f} s p95</text>
 
-  <text class="note" x="48" y="536">Costs compare complete lane runs. The structured summary also includes a same-token counterfactual.</text>
+  <text class="note" x="48" y="556">Costs compare complete lane runs. The structured summary also includes a same-token counterfactual.</text>
 </svg>
 '''
 

@@ -8,6 +8,7 @@ CONFIG_DIR="${ROOT_DIR}/config"
 WORK_DIR="${REPO_ROOT}/.work/cost-based-semantic-routing"
 CHECKOUT_DIR="${WORK_DIR}/agentgateway"
 EXAMPLE_DIR="${CHECKOUT_DIR}/examples/llm-semantic-routing"
+EXAMPLE_SOURCE_FILE="${WORK_DIR}/example-source"
 RESULTS_DIR="${ROOT_DIR}/results"
 
 # shellcheck disable=SC1091
@@ -262,6 +263,7 @@ Important environment variables:
   CAPTURE_OUTPUT          true to save model responses for satisfaction scoring
   SUMMARY_FILE             Summary JSON used by chart; defaults to the latest run
   EXAMPLE_REF             Defaults to main; use a SHA to pin upstream configuration
+  EXAMPLE_REPO_URL        Defaults to the public agentgateway repository
   VSR_CHART_VERSION       Defaults to the 0.3.0 release chart
   VSR_IMAGE_TAG           Defaults to the v0.3.0 extproc image
   VERIFY_TIMEOUT_SEC      Component and endpoint timeout; defaults to 300
@@ -815,10 +817,23 @@ install_agentgateway() {
 }
 
 fetch_example() {
-  if [[ -d "${CHECKOUT_DIR}/.git" ]]; then
-    return
+  local cached_repo_url cached_ref actual_repo_url
+  if [[ -d "${CHECKOUT_DIR}/.git" && -f "${EXAMPLE_SOURCE_FILE}" ]]; then
+    cached_repo_url="$(sed -n '1p' "${EXAMPLE_SOURCE_FILE}")"
+    cached_ref="$(sed -n '2p' "${EXAMPLE_SOURCE_FILE}")"
+    actual_repo_url="$(git -C "${CHECKOUT_DIR}" config --get remote.origin.url || true)"
+    if [[ "${cached_repo_url}" == "${EXAMPLE_REPO_URL}" &&
+      "${cached_ref}" == "${EXAMPLE_REF}" &&
+      "${actual_repo_url}" == "${EXAMPLE_REPO_URL}" ]]; then
+      return
+    fi
+    log "Replacing cached agentgateway configuration with ${EXAMPLE_REPO_URL} (${EXAMPLE_REF})"
+  elif [[ -e "${CHECKOUT_DIR}" ]]; then
+    log "Replacing untracked cached agentgateway configuration with ${EXAMPLE_REPO_URL} (${EXAMPLE_REF})"
   fi
 
+  [[ "${CHECKOUT_DIR}" == "${WORK_DIR}"/* ]] || die "unsafe checkout path"
+  rm -rf "${CHECKOUT_DIR}"
   log "Fetching agentgateway configuration (${EXAMPLE_REF})"
   mkdir -p "${CHECKOUT_DIR}"
   git -C "${CHECKOUT_DIR}" init --quiet
@@ -826,6 +841,7 @@ fetch_example() {
   git -C "${CHECKOUT_DIR}" fetch --depth 1 origin "${EXAMPLE_REF}"
   git -C "${CHECKOUT_DIR}" checkout --detach --quiet FETCH_HEAD
   git -C "${CHECKOUT_DIR}" rev-parse HEAD > "${WORK_DIR}/example-revision"
+  printf '%s\n%s\n' "${EXAMPLE_REPO_URL}" "${EXAMPLE_REF}" > "${EXAMPLE_SOURCE_FILE}"
   [[ -d "${EXAMPLE_DIR}" ]] || die "${EXAMPLE_REF} does not contain examples/llm-semantic-routing"
 }
 

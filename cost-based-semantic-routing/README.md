@@ -218,8 +218,11 @@ set. When Prometheus is disabled or unavailable, that status and reason are
 preserved in both artifacts instead of silently omitting the section.
 For manual inspection, `promql/queries.promql` contains queries scoped to one
 `experiment_id`, rather than a shared time window.
-Run `./demo.sh refresh --yes` after changing `EXAMPLE_REF`; setup and evaluation
-reuse an existing fetched checkout by design.
+The fetched checkout records both `EXAMPLE_REPO_URL` and `EXAMPLE_REF`. Setup
+and evaluation reuse it only when both still match, preventing a local
+development checkout from silently supplying a different routing configuration.
+Run `./demo.sh refresh --yes` to deliberately discard local tuning and fetch
+the requested source again.
 
 The evaluation and `report` command generate the SVG chart automatically. It
 prefers catalog-priced agentgateway metrics when Prometheus is available and

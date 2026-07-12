@@ -242,9 +242,9 @@ usage() {
 Usage: ./demo.sh COMMAND [--yes]
 
 Commands:
-  all        Set up the stack, verify streamed ExtProc, and run the evaluation
+  all        Set up the stack, verify buffered ExtProc, and run the evaluation
   setup      Create the cluster and install agentgateway, observability, and vSR
-  verify     Run the zero-token immediate-response ExtProc probe
+  verify     Run small model-backed buffered ExtProc routing checks
   eval       Run a paid smoke test, the three-lane corpus, and a result summary
   report     Regenerate the latest text and JSON result summaries
   chart      Render an SVG chart from the latest or SUMMARY_FILE summary JSON
@@ -1043,6 +1043,7 @@ deploy_router() {
     --values "${EXAMPLE_DIR}/k8s/semantic-router-values.yaml" \
     --set-string "image.tag=${VSR_IMAGE_TAG}" \
     --set-string image.pullPolicy=IfNotPresent \
+    --reset-values \
     "${helm_args[@]}" \
     --wait --timeout "${VSR_READY_TIMEOUT_SEC}s"
   verify_router_services
@@ -1112,38 +1113,60 @@ cmd_setup() {
   printf 'Example revision: %s\n' "$(cat "${WORK_DIR}/example-revision")"
 }
 
-cmd_verify() {
-  preflight
-  use_cluster
-  fetch_example
-  local url headers body status experiment_id
-  verify_deployed_stack
-  url="$(gateway_url)"
-  headers="${WORK_DIR}/immediate-response.headers"
-  body="${WORK_DIR}/immediate-response.json"
-  experiment_id="semantic-routing-demo-verify-$(date -u +%Y%m%dT%H%M%SZ)-$$"
+verify_routing_probe() {
+  local url="$1" experiment_id="$2" label="$3" expected_model="$4"
+  local expected_decision="$5" prompt="$6" headers body payload status
+  headers="${WORK_DIR}/${label}-routing.headers"
+  body="${WORK_DIR}/${label}-routing.json"
+  payload="$(python3 - "${prompt}" <<'PY'
+import json
+import sys
 
-  log "Verifying streamed ExtProc and immediate responses without calling OpenAI"
+print(json.dumps({
+    "model": "auto",
+    "messages": [{"role": "user", "content": sys.argv[1]}],
+    "max_tokens": 32,
+}))
+PY
+)"
+
   status="$(curl -sS --max-time 60 -D "${headers}" -o "${body}" -w '%{http_code}' \
     "${url}/v1/chat/completions" \
     -H 'Content-Type: application/json' \
     -H 'X-VSR-Debug: true' \
-    -H "X-Request-ID: ${experiment_id}-immediate-response" \
+    -H "X-Request-ID: ${experiment_id}-${label}" \
     -H "X-Experiment-ID: ${experiment_id}" \
-    -H 'X-Eval-ID: immediate-response' \
+    -H "X-Eval-ID: ${label}-routing" \
     -H 'X-Eval-Lane: routed' \
-    -d '{"model":"auto","messages":[{"role":"user","content":"VSR_IMMEDIATE_RESPONSE_PROBE"}],"max_tokens":16}')"
+    -d "${payload}")"
 
   [[ "${status}" == "200" ]] || {
     cat "${body}" >&2
-    die "immediate-response probe returned HTTP ${status}"
+    die "${label} routing probe returned HTTP ${status}"
   }
-  grep -Eiq '^x-vsr-fast-response:[[:space:]]*true' "${headers}" || \
-    die "response did not contain x-vsr-fast-response: true"
-  grep -Eiq '^x-vsr-selected-decision:[[:space:]]*immediate_response_probe' "${headers}" || \
-    die "response did not select immediate_response_probe"
+  grep -Eiq "^x-vsr-selected-model:[[:space:]]*${expected_model}[[:space:]]*$" "${headers}" || \
+    die "${label} routing probe did not select ${expected_model}"
+  grep -Eiq "^x-vsr-selected-decision:[[:space:]]*${expected_decision}[[:space:]]*$" "${headers}" || \
+    die "${label} routing probe did not select ${expected_decision}"
 
-  printf 'Streamed ExtProc probe passed: HTTP 200, fast response, zero upstream tokens.\n'
+  printf '%s routing probe passed: HTTP 200, selected %s.\n' "${label}" "${expected_model}"
+}
+
+cmd_verify() {
+  preflight
+  use_cluster
+  fetch_example
+  local url experiment_id
+  verify_deployed_stack
+  url="$(gateway_url)"
+  experiment_id="semantic-routing-demo-verify-$(date -u +%Y%m%dT%H%M%SZ)-$$"
+
+  log "Verifying buffered ExtProc model selection with two small OpenAI requests"
+  verify_routing_probe "${url}" "${experiment_id}" routine gpt-5.4-nano \
+    route_to_low_cost 'Implement a small Go helper and one table-driven test.'
+  verify_routing_probe "${url}" "${experiment_id}" advanced gpt-5.5 \
+    route_to_expensive 'Design a distributed rate limiter that remains correct during Redis failover and regional network partitions.'
+  printf 'Buffered ExtProc routing checks passed for both model tiers.\n'
   verify_request_observability "${experiment_id}"
 }
 

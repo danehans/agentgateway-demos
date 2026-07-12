@@ -15,7 +15,7 @@ to measure that configuration.
 ```mermaid
 flowchart LR
     A[Application] -->|OpenAI request: model auto| G[agentgateway]
-    G -->|FullDuplexStreamed ExtProc| S[vLLM Semantic Router]
+    G -->|Buffered ExtProc| S[vLLM Semantic Router]
     S -->|routine prompt| L[Lower-cost model]
     S -->|advanced prompt| H[Higher-capability model]
     L --> G
@@ -88,8 +88,8 @@ through the three lanes, for 600 billable model requests.
 6. Fetches the selected upstream agentgateway revision and records its SHA.
 7. Installs vSR from the upstream Helm values, then applies the core routed
    configuration and this demo's forced-model baseline lanes.
-8. Verifies streamed ExtProc with an immediate response that consumes no model
-   tokens and never reaches OpenAI.
+8. Verifies buffered ExtProc by routing small routine and advanced coding
+   prompts to their expected models.
 9. Sends every selected corpus turn through `routed`, `always_low_cost`, and
    `always_expensive`, then summarizes cost, accuracy, and latency.
 
@@ -104,7 +104,7 @@ component that remains unhealthy after its retry window:
 | vSR | deployment rollout, bound model-cache PVC, `/ready`, `/config/router`, ExtProc gRPC connectivity, and `/metrics` |
 | Metrics stack | Prometheus and Grafana rollouts, PromQL execution, Grafana datasource health, OTel scrape/remote-write pipeline, and dashboard discovery |
 | Full OTel stack | Loki and Tempo readiness, log and trace collector connectivity, Loki datasource health, and Tempo datasource configuration |
-| Immediate probe | streamed ExtProc response plus agentgateway request/latency metrics and correlated Loki/Tempo records |
+| Routing verification | buffered ExtProc model selection plus agentgateway request/latency metrics and correlated Loki/Tempo records |
 | Paid smoke | nonzero catalog-priced cost derived from token metrics, exact catalog-lookup counters, token and LLM-duration metrics, all three experiment lanes, and cost-bearing correlated logs/traces |
 
 The standalone `verify` and `eval` commands repeat the deployed-stack checks
@@ -160,7 +160,7 @@ EXAMPLE_REF=<agentgateway-commit-sha> ./demo.sh refresh
 
 ```bash
 ./demo.sh setup       # Install the cluster components without paid traffic
-./demo.sh verify      # Test streamed ExtProc without calling OpenAI
+./demo.sh verify      # Verify buffered ExtProc selects both expected models
 ./demo.sh eval        # Run the paid smoke test and experiment
 ./demo.sh report      # Regenerate local and Prometheus summary artifacts
 ./demo.sh chart       # Render an SVG chart from the latest result summary
@@ -168,6 +168,9 @@ EXAMPLE_REF=<agentgateway-commit-sha> ./demo.sh refresh
 ./demo.sh dashboard   # Open a Grafana port-forward on localhost:3000
 ./demo.sh cleanup     # Delete the dedicated cluster
 ```
+
+`verify` sends two small billable requests: one routine coding prompt and one
+advanced distributed-systems prompt. `setup` remains free of OpenAI requests.
 
 For a smaller evaluation:
 
@@ -303,4 +306,3 @@ exact error response for diagnosis.
 - [agentgateway cost tracking](https://agentgateway.dev/docs/kubernetes/main/llm/cost-tracking/)
 - [agentgateway OTel stack](https://agentgateway.dev/docs/kubernetes/main/observability/otel-stack/)
 - [vSR agentgateway integration](https://vllm-semantic-router.com/docs/installation/k8s/agentgateway/)
-- [vSR streamed ExtProc](https://vllm-semantic-router.com/docs/installation/k8s/streamed-extproc/)

@@ -14,7 +14,7 @@ from pathlib import Path
 SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
-from corpus import load_corpus
+from corpus import balanced_subset, load_corpus
 
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
@@ -240,7 +240,7 @@ def main():
     args = parse_args()
     catalog = load_catalog(args.catalog)
     try:
-        items = load_corpus(args.dataset, args.limit)
+        items = balanced_subset(load_corpus(args.dataset), args.limit, args.seed)
     except ValueError as error:
         raise SystemExit(str(error)) from error
     lanes = [lane.strip() for lane in args.lanes.split(",") if lane.strip()]

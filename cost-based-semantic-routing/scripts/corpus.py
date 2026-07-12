@@ -2,6 +2,7 @@
 """Load and validate the multi-turn semantic-routing evaluation corpus."""
 
 import json
+import random
 from pathlib import Path
 
 
@@ -112,3 +113,48 @@ def load_corpus(path, limit=0):
 
 def expected_models(path):
     return sorted({item["expected_model"] for item in load_corpus(path)})
+
+
+def balanced_subset(items, limit, seed=7):
+    """Select a deterministic, model-balanced subset without changing the corpus."""
+    if limit < 0:
+        raise ValueError("limit must not be negative")
+    if not limit or limit >= len(items):
+        return items
+
+    groups = {}
+    for index, item in enumerate(items):
+        groups.setdefault(item["expected_model"], []).append((index, item))
+
+    models = sorted(groups)
+    base, remainder = divmod(limit, len(models))
+    targets = {
+        model: base + int(index < remainder)
+        for index, model in enumerate(models)
+    }
+    selected = []
+    randomizer = random.Random(seed)
+    for model in models:
+        candidates = list(groups[model])
+        randomizer.shuffle(candidates)
+        target = min(targets[model], len(candidates))
+        selected.extend(candidates[:target])
+        targets[model] -= target
+
+    remaining = limit - len(selected)
+    if remaining:
+        for model in models:
+            candidates = [
+                candidate
+                for candidate in groups[model]
+                if candidate not in selected
+            ]
+            randomizer.shuffle(candidates)
+            selected.extend(candidates[:remaining])
+            remaining = limit - len(selected)
+            if not remaining:
+                break
+    if remaining:
+        raise ValueError(f"requested {limit} corpus items, but only found {len(items)}")
+
+    return [item for _index, item in sorted(selected)]

@@ -352,6 +352,23 @@ class EvaluationToolingTest(unittest.TestCase):
         final_turns = [row for row in rows if row["turn"] == 4]
         self.assertTrue(all(len(row["messages"]) == 7 for row in final_turns))
 
+    def test_limited_corpus_is_model_balanced(self):
+        dataset = DEMO_DIR / "data" / "eval-corpus.jsonl"
+        rows = corpus.load_corpus(dataset)
+
+        selected = corpus.balanced_subset(rows, 50)
+
+        self.assertEqual(len(selected), 50)
+        self.assertEqual(
+            sum(row["expected_model"] == "gpt-5.4-nano" for row in selected), 25
+        )
+        self.assertEqual(
+            sum(row["expected_model"] == "gpt-5.5" for row in selected), 25
+        )
+        self.assertEqual({row["language"] for row in selected}, {"go", "rust"})
+        self.assertEqual({row["turn"] for row in selected}, {1, 2, 3, 4})
+        self.assertEqual(selected, corpus.balanced_subset(rows, 50))
+
     def test_evaluator_preserves_corpus_history(self):
         item = {
             "id": "conversation-turn-2",

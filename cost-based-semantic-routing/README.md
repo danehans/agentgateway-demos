@@ -175,8 +175,14 @@ advanced distributed-systems prompt. `setup` remains free of OpenAI requests.
 For a smaller evaluation:
 
 ```bash
-EVAL_LIMIT=4 ./demo.sh eval
+EVAL_LIMIT=50 ./demo.sh eval --yes
 ```
+
+A nonzero `EVAL_LIMIT` selects a deterministic, model-balanced subset instead
+of the first turns in the file. This 50-turn run contains 25 expected
+lower-cost and 25 expected expensive selections, sends 150 corpus requests,
+and still includes every conversation turn. The separate two-turn smoke test
+sends six additional requests.
 
 For a lower-resource metrics-only stack:
 

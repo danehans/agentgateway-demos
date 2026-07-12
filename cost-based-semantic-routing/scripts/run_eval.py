@@ -11,6 +11,11 @@ import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+from corpus import load_corpus
+
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 VSR_HEADERS = (
@@ -51,21 +56,6 @@ def parse_args():
     parser.add_argument("--capture-output", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     return parser.parse_args()
-
-
-def load_jsonl(path, limit):
-    rows = []
-    with path.open(encoding="utf-8") as stream:
-        for line_number, line in enumerate(stream, 1):
-            if not line.strip():
-                continue
-            try:
-                rows.append(json.loads(line))
-            except json.JSONDecodeError as error:
-                raise SystemExit(f"{path}:{line_number}: invalid JSON: {error}") from error
-            if limit and len(rows) >= limit:
-                break
-    return rows
 
 
 def load_catalog(path):
@@ -176,12 +166,27 @@ def response_text(body):
     return content if isinstance(content, str) else json.dumps(content, ensure_ascii=False)
 
 
+def request_messages(args, item):
+    messages = item.get("messages")
+    if not isinstance(messages, list) or not messages:
+        raise ValueError(f"{item['id']}: corpus item has no messages")
+    for message in messages:
+        if (
+            not isinstance(message, dict)
+            or message.get("role") not in {"user", "assistant"}
+            or not isinstance(message.get("content"), str)
+            or not message["content"].strip()
+        ):
+            raise ValueError(f"{item['id']}: corpus contains an invalid message")
+    return [{"role": "system", "content": args.system_prompt}, *messages]
+
+
 def run_one(args, catalog, url, item, lane):
     model = request_model(args, lane)
     headers = request_headers(args.run_id, item, lane)
     payload = {
         "model": model,
-        "messages": [{"role": "system", "content": args.system_prompt}, {"role": "user", "content": item["prompt"]}],
+        "messages": request_messages(args, item),
         "max_tokens": item.get("max_tokens", 180),
     }
     if args.temperature is not None:
@@ -203,6 +208,10 @@ def run_one(args, catalog, url, item, lane):
         "run_id": args.run_id,
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "id": item["id"],
+        "conversation_id": item.get("conversation_id", item["id"]),
+        "turn": item.get("turn", 1),
+        "language": item.get("language", ""),
+        "message_count": len(payload["messages"]) - 1,
         "family": item.get("family", ""),
         "lane": lane,
         "expected_model": item.get("expected_model", ""),
@@ -230,7 +239,10 @@ def run_one(args, catalog, url, item, lane):
 def main():
     args = parse_args()
     catalog = load_catalog(args.catalog)
-    items = load_jsonl(args.dataset, args.limit)
+    try:
+        items = load_corpus(args.dataset, args.limit)
+    except ValueError as error:
+        raise SystemExit(str(error)) from error
     lanes = [lane.strip() for lane in args.lanes.split(",") if lane.strip()]
     url = request_url(args.gateway_url, args.path)
     jobs = [(item, lane) for item in items for lane in lanes]

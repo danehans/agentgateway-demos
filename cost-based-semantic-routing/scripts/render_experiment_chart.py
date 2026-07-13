@@ -54,7 +54,7 @@ def metric_data(summary):
     if not all(lane in lanes for lane, _, _ in LANES):
         raise ValueError("summary does not contain routed and always-expensive latency")
     return {
-        "quality_review": local.get("quality_review"),
+        "routing": local.get("routing"),
         "model_mix": local.get("routed_model_mix"),
         "routed_p50": float(lanes["routed"]["latency_ms"]["p50"]) / 1000,
         "routed_p95": float(lanes["routed"]["latency_ms"]["p95"]) / 1000,
@@ -67,16 +67,20 @@ def text(value):
     return escape(str(value), quote=True)
 
 
-def review_metrics(quality_review):
-    acceptance = quality_review.get("acceptance_comparison") if quality_review else None
-    fraction = acceptance.get("fraction") if acceptance else None
+def routing_metrics(routing):
+    if not routing:
+        return "Unavailable", "No successful routed requests", 0.0
+    escalation = routing.get("complex_prompt_escalation", {})
+    fraction = escalation.get("fraction")
     if fraction is None:
-        return "Pending", "Complete a blinded A/B answer spot check", 0.0
-    detail = (
-        f"{acceptance['routed_acceptable']} routed / "
-        f"{acceptance['always_expensive_acceptable']} expensive accepted"
-    )
-    return f"{fraction:.1%}", detail, max(0, min(1, fraction))
+        detail = "No complex prompts in this sample"
+        fraction = 0.0
+    else:
+        detail = (
+            f"{escalation['selected_expensive']}/{escalation['expected']} "
+            "complex prompts sent to GPT-5.5"
+        )
+    return f"{routing['accuracy']:.1%}", detail, max(0, min(1, fraction))
 
 
 def model_mix_detail(model_mix):
@@ -102,7 +106,7 @@ def render_chart(summary):
     p50_change = 0.0 if metrics["expensive_p50"] == 0 else (
         metrics["routed_p50"] / metrics["expensive_p50"] - 1
     )
-    review_value, review_detail, review_fraction = review_metrics(metrics["quality_review"])
+    agreement, escalation_detail, escalation_fraction = routing_metrics(metrics["routing"])
     mix_detail, cheap_fraction = model_mix_detail(metrics["model_mix"])
     run_id = summary.get("run_id", "semantic-routing-experiment")
     max_cost = max(costs.values())
@@ -120,7 +124,7 @@ def render_chart(summary):
 
     return f'''<svg xmlns="http://www.w3.org/2000/svg" width="960" height="570" viewBox="0 0 960 570" role="img" aria-labelledby="title description">
   <title id="title">Semantic routing experiment results</title>
-  <desc id="description">Semantic routing spend, answer spot check, model mix, and latency for run {text(run_id)}.</desc>
+  <desc id="description">Semantic routing spend, routing agreement, model mix, and latency for run {text(run_id)}.</desc>
   <style>
     text {{ font-family: Arial, Helvetica, sans-serif; fill: #0f172a; }}
     .title {{ font-size: 26px; font-weight: 700; }}
@@ -141,9 +145,9 @@ def render_chart(summary):
   <text class="kpi-value" x="48" y="151">{savings:.1%}</text>
   <text class="subtitle" x="48" y="173">Routed versus always expensive</text>
   <line x1="337" y1="112" x2="337" y2="177" stroke="#cbd5e1"/>
-  <text class="kpi-label" x="370" y="121">A/B ACCEPTANCE</text>
-  <text class="kpi-value" x="370" y="151">{text(review_value)}</text>
-  <text class="subtitle" x="370" y="173">{text(review_detail)}</text>
+  <text class="kpi-label" x="370" y="121">ROUTING AGREEMENT</text>
+  <text class="kpi-value" x="370" y="151">{text(agreement)}</text>
+  <text class="subtitle" x="370" y="173">Expected tiers in this coding sample</text>
   <line x1="655" y1="112" x2="655" y2="177" stroke="#cbd5e1"/>
   <text class="kpi-label" x="688" y="121">ROUTED P50 LATENCY</text>
   <text class="kpi-value" x="688" y="151">{metrics['routed_p50']:.2f} s</text>
@@ -160,11 +164,11 @@ def render_chart(summary):
   <text class="metric-detail" x="48" y="481">{text(mix_detail)}</text>
 
   <line x1="337" y1="386" x2="337" y2="505" stroke="#cbd5e1"/>
-  <text class="section" x="370" y="395">BLINDED A/B SPOT CHECK</text>
+  <text class="section" x="370" y="395">COMPLEX-PROMPT ESCALATION</text>
   <rect x="370" y="410" width="230" height="18" fill="#e2e8f0"/>
-  <rect x="370" y="410" width="{230 * review_fraction:.1f}" height="18" fill="#0f766e"/>
-  <text class="metric" x="370" y="460">{text(review_value)}</text>
-  <text class="metric-detail" x="370" y="481">{text(review_detail)}</text>
+  <rect x="370" y="410" width="{230 * escalation_fraction:.1f}" height="18" fill="#0f766e"/>
+  <text class="metric" x="370" y="460">{escalation_fraction:.0%} to GPT-5.5</text>
+  <text class="metric-detail" x="370" y="481">{text(escalation_detail)}</text>
 
   <line x1="655" y1="386" x2="655" y2="505" stroke="#cbd5e1"/>
   <text class="section" x="688" y="395">END-TO-END LATENCY</text>
@@ -172,7 +176,7 @@ def render_chart(summary):
   <text class="metric-detail" x="688" y="454">{metrics['routed_p95']:.2f} s p95 semantic routing</text>
   <text class="metric-detail" x="688" y="481">Always expensive: {metrics['expensive_p50']:.2f} s p50, {metrics['expensive_p95']:.2f} s p95</text>
 
-  <text class="note" x="48" y="548">Costs compare complete lane runs. The structured summary also includes a same-token counterfactual.</text>
+  <text class="note" x="48" y="548">Agreement uses expected tiers in the checked-in coding sample; it is a routing sanity check, not answer scoring.</text>
 </svg>
 '''
 

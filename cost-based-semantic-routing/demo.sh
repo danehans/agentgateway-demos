@@ -27,11 +27,9 @@ OBSERVABILITY_PROFILE="${OBSERVABILITY_PROFILE:-full}"
 EVAL_DATASET="${EVAL_DATASET:-${ROOT_DIR}/data/demo-corpus.jsonl}"
 EVAL_LIMIT="${EVAL_LIMIT:-0}"
 EVAL_LANES="routed,always_expensive"
-REVIEW_LIMIT="${REVIEW_LIMIT:-12}"
 EVAL_REASONING_EFFORT="${EVAL_REASONING_EFFORT:-none}"
 SMOKE_LIMIT="${SMOKE_LIMIT:-2}"
 EVAL_DELAY_SEC="${EVAL_DELAY_SEC:-1}"
-CAPTURE_OUTPUT="${CAPTURE_OUTPUT:-false}"
 VERIFY_TIMEOUT_SEC="${VERIFY_TIMEOUT_SEC:-300}"
 VERIFY_INTERVAL_SEC="${VERIFY_INTERVAL_SEC:-5}"
 VSR_READY_TIMEOUT_SEC="${VSR_READY_TIMEOUT_SEC:-1200}"
@@ -251,27 +249,6 @@ resolve_result_file() {
   cat "${RESULTS_DIR}/latest-result"
 }
 
-dataset_for_result() {
-  local result_file="$1" metadata_file dataset_path
-  metadata_file="${result_file%.jsonl}-metadata.json"
-  if [[ -f "${metadata_file}" ]]; then
-    dataset_path="$(python3 - "${metadata_file}" <<'PY'
-import json
-import sys
-
-with open(sys.argv[1], encoding="utf-8") as stream:
-    print(json.load(stream).get("dataset", {}).get("path", ""))
-PY
-)"
-    if [[ -n "${dataset_path}" && -f "${dataset_path}" ]]; then
-      printf '%s\n' "${dataset_path}"
-      return
-    fi
-  fi
-  [[ -f "${EVAL_DATASET}" ]] || die "review dataset is unavailable; set EVAL_DATASET"
-  printf '%s\n' "${EVAL_DATASET}"
-}
-
 usage() {
   cat <<'EOF'
 Usage: ./demo.sh COMMAND [--yes]
@@ -283,8 +260,6 @@ Commands:
   eval       Run a paid smoke test, the two-lane corpus, and a result summary
   report     Regenerate the latest text and JSON result summaries
   chart      Render an SVG chart from the latest or SUMMARY_FILE summary JSON
-  review     Create a blinded answer-quality review package from a captured run
-  score      Score a completed blinded review and regenerate the report and chart
   router     Redeploy vSR and experiment resources after tuning the fetched config
   refresh    Replace the fetched agentgateway checkout with EXAMPLE_REF
   status     Show the deployed resources and resolved example revision
@@ -300,12 +275,8 @@ Important environment variables:
                           developer-prompt sample.
   EVAL_LIMIT              Prompts to run from the start of the corpus; defaults
                           to every prompt.
-  REVIEW_LIMIT            Answers to include in the blinded A/B spot check;
-                          defaults to 12. Set 0 to include every prompt.
   EVAL_REASONING_EFFORT   OpenAI reasoning effort for both lanes; defaults to
-                          none so bounded demo responses remain reviewable.
-  CAPTURE_OUTPUT          true to save model responses for blinded quality review
-  REVIEW_FILE             Completed blinded review CSV used by the score command
+                          none to keep demo responses bounded.
   SUMMARY_FILE             Summary JSON used by chart; defaults to the latest run
   EXAMPLE_REF             Defaults to main; use a SHA to pin upstream configuration
   EXAMPLE_REPO_URL        Defaults to the public agentgateway repository
@@ -358,7 +329,6 @@ preflight() {
   esac
   [[ "${EVAL_LIMIT}" =~ ^[0-9]+$ ]] || die "EVAL_LIMIT must be an integer"
   [[ -f "${EVAL_DATASET}" ]] || die "EVAL_DATASET does not exist: ${EVAL_DATASET}"
-  [[ "${REVIEW_LIMIT}" =~ ^[0-9]+$ ]] || die "REVIEW_LIMIT must be an integer"
   [[ "${SMOKE_LIMIT}" =~ ^[0-9]+$ ]] || die "SMOKE_LIMIT must be an integer"
   [[ "${VERIFY_TIMEOUT_SEC}" =~ ^[1-9][0-9]*$ ]] || die "VERIFY_TIMEOUT_SEC must be positive"
   [[ "${VSR_READY_TIMEOUT_SEC}" =~ ^[1-9][0-9]*$ ]] || die "VSR_READY_TIMEOUT_SEC must be positive"
@@ -1265,11 +1235,6 @@ PY
 
 run_eval_file() {
   local run_id="$1" output="$2" limit="$3"
-  local capture_args=() validation_args=()
-  if [[ "${CAPTURE_OUTPUT}" == "true" ]]; then
-    capture_args+=(--capture-output)
-    validation_args+=(--require-response-text)
-  fi
   python3 "${ROOT_DIR}/scripts/run_eval.py" \
     --gateway-url "$(gateway_url)" \
     --dataset "${EVAL_DATASET}" \
@@ -1279,10 +1244,9 @@ run_eval_file() {
     --limit "${limit}" \
     --lanes "${EVAL_LANES}" \
     --reasoning-effort "${EVAL_REASONING_EFFORT}" \
-    --delay-sec "${EVAL_DELAY_SEC}" \
-    "${capture_args[@]}"
+    --delay-sec "${EVAL_DELAY_SEC}"
   python3 "${ROOT_DIR}/scripts/validate_results.py" \
-    "${output}" --expected-lanes "${EVAL_LANES}" "${validation_args[@]}"
+    "${output}" --expected-lanes "${EVAL_LANES}"
 }
 
 cmd_eval() {
@@ -1311,10 +1275,6 @@ cmd_eval() {
   printf '%s\n' "${result_file}" > "${RESULTS_DIR}/latest-result"
   write_metadata "${run_id}" "${result_file}"
 
-  if [[ "${CAPTURE_OUTPUT}" == "true" ]]; then
-    printf 'Captured response text. Run ./demo.sh review to create blinded review files.\n'
-  fi
-
   cmd_report
 }
 
@@ -1322,9 +1282,9 @@ cmd_report() {
   preflight
   use_cluster
   local result_file result_base summary_json summary_text summary_chart experiment_id
-  local local_json local_text prometheus_json prometheus_text quality_review_file
+  local local_json local_text prometheus_json prometheus_text
   local port_forward_pid prometheus_status prometheus_reason prometheus_url
-  local summary_args=() quality_args=()
+  local summary_args=()
   result_file="$(resolve_result_file)"
   [[ -f "${result_file}" ]] || die "result file does not exist: ${result_file}"
   experiment_id="$(python3 -c '
@@ -1345,18 +1305,12 @@ with open(sys.argv[1], encoding="utf-8") as stream:
   local_text="${WORK_DIR}/$(basename "${result_base}")-local-summary.txt"
   prometheus_json="${WORK_DIR}/$(basename "${result_base}")-prometheus-summary.json"
   prometheus_text="${WORK_DIR}/$(basename "${result_base}")-prometheus-summary.txt"
-  quality_review_file="${QUALITY_REVIEW_FILE:-${result_base}-quality-review.json}"
   rm -f "${prometheus_json}" "${prometheus_text}"
-
-  if [[ -f "${quality_review_file}" ]]; then
-    quality_args+=(--quality-review "${quality_review_file}")
-  fi
   python3 "${ROOT_DIR}/scripts/summarize_results.py" \
     "${result_file}" \
     --catalog "${WORK_DIR}/catalog.json" \
     --json-output "${local_json}" \
     --text-output "${local_text}" \
-    "${quality_args[@]}" \
     >/dev/null
 
   prometheus_status=disabled
@@ -1401,48 +1355,6 @@ with open(sys.argv[1], encoding="utf-8") as stream:
   printf 'JSON summary: %s\n' "${summary_json}"
   printf 'Text summary: %s\n' "${summary_text}"
   printf 'Chart: %s\n' "${summary_chart}"
-}
-
-cmd_review() {
-  require_command python3
-  local result_file result_base dataset review_file key_file instructions_file
-  result_file="$(resolve_result_file)"
-  [[ -f "${result_file}" ]] || die "result file does not exist: ${result_file}"
-  result_base="${result_file%.jsonl}"
-  dataset="$(dataset_for_result "${result_file}")"
-  review_file="${result_base}-blind-review.csv"
-  key_file="${result_base}-blind-review-key.json"
-  instructions_file="${result_base}-blind-review-instructions.md"
-
-  python3 "${ROOT_DIR}/scripts/prepare_blind_review.py" \
-    "${result_file}" \
-    --dataset "${dataset}" \
-    --output "${review_file}" \
-    --key-output "${key_file}" \
-    --instructions-output "${instructions_file}" \
-    --limit "${REVIEW_LIMIT}"
-  printf 'Review CSV: %s\n' "${review_file}"
-  printf 'Reviewer instructions: %s\n' "${instructions_file}"
-  printf 'Keep the blind key separate from reviewers: %s\n' "${key_file}"
-}
-
-cmd_score() {
-  require_command python3
-  local result_file result_base review_file key_file quality_file
-  result_file="$(resolve_result_file)"
-  [[ -f "${result_file}" ]] || die "result file does not exist: ${result_file}"
-  result_base="${result_file%.jsonl}"
-  review_file="${REVIEW_FILE:-${result_base}-blind-review.csv}"
-  key_file="${result_base}-blind-review-key.json"
-  quality_file="${result_base}-quality-review.json"
-  [[ -f "${review_file}" ]] || die "review file does not exist: ${review_file}"
-  [[ -f "${key_file}" ]] || die "blind key does not exist: ${key_file}"
-
-  python3 "${ROOT_DIR}/scripts/score_blind_review.py" \
-    --review "${review_file}" \
-    --key "${key_file}" \
-    --output "${quality_file}"
-  RESULT_FILE="${result_file}" QUALITY_REVIEW_FILE="${quality_file}" cmd_report
 }
 
 cmd_chart() {
@@ -1535,8 +1447,6 @@ case "${COMMAND}" in
   eval) cmd_eval ;;
   report) cmd_report ;;
   chart) cmd_chart ;;
-  review) cmd_review ;;
-  score) cmd_score ;;
   router) cmd_router ;;
   refresh) cmd_refresh ;;
   status) cmd_status ;;

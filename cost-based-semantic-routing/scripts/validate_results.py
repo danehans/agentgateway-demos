@@ -8,11 +8,6 @@ def main():
     parser = argparse.ArgumentParser(description="Validate semantic routing eval results.")
     parser.add_argument("results")
     parser.add_argument("--expected-lanes", default="routed,always_expensive")
-    parser.add_argument(
-        "--require-response-text",
-        action="store_true",
-        help="fail when a successful result has no captured assistant content",
-    )
     args = parser.parse_args()
 
     with open(args.results, encoding="utf-8") as stream:
@@ -28,19 +23,6 @@ def main():
             body = row.get("error_body") or row.get("error") or "unknown error"
             print(f"- {row.get('lane')} {row.get('id')}: status={row.get('status')} {body}")
         raise SystemExit(1)
-
-    if args.require_response_text:
-        missing_response_text = [
-            row
-            for row in rows
-            if not isinstance(row.get("response_text"), str)
-            or not row["response_text"].strip()
-        ]
-        if missing_response_text:
-            print(f"{len(missing_response_text)} successful request(s) had no assistant response text:")
-            for row in missing_response_text[:10]:
-                print(f"- {row.get('lane')} {row.get('id')}")
-            raise SystemExit(1)
 
     expected_lanes = {lane for lane in args.expected_lanes.split(",") if lane}
     actual_lanes = {row.get("lane") for row in rows}

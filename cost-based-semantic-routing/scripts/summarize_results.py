@@ -28,18 +28,6 @@ def load_results(path):
         return [json.loads(line) for line in stream if line.strip()]
 
 
-def load_quality_review(path):
-    if not path:
-        return None
-    with Path(path).open(encoding="utf-8") as stream:
-        review = json.load(stream)
-    required = {"reviewed", "total", "acceptance_comparison", "pairwise"}
-    missing = sorted(required - set(review))
-    if missing:
-        raise ValueError(f"{path}: quality review is missing: {', '.join(missing)}")
-    return review
-
-
 def lane_summary(rows):
     summary = {}
     grouped = defaultdict(list)
@@ -62,14 +50,23 @@ def lane_summary(rows):
     return summary
 
 
-def routing_summary(rows, catalog):
+def routing_summary(rows, catalog, expensive_model):
     routed = [row for row in rows if row.get("lane") == "routed" and row.get("ok")]
     if not routed:
         return None
+    expensive_model = canonical_model(catalog, expensive_model)
     confusion = defaultdict(int)
     for row in routed:
         confusion[(canonical_model(catalog, row.get("expected_model")), canonical_model(catalog, row.get("selected_model")))] += 1
     correct = sum(row.get("routing_correct") is True for row in routed)
+    complex_prompts = [
+        row for row in routed
+        if canonical_model(catalog, row.get("expected_model")) == expensive_model
+    ]
+    escalated = [
+        row for row in complex_prompts
+        if canonical_model(catalog, row.get("selected_model")) == expensive_model
+    ]
     return {
         "correct": correct,
         "total": len(routed),
@@ -78,6 +75,11 @@ def routing_summary(rows, catalog):
             {"expected_model": expected, "selected_model": selected, "count": count}
             for (expected, selected), count in sorted(confusion.items())
         ],
+        "complex_prompt_escalation": {
+            "expected": len(complex_prompts),
+            "selected_expensive": len(escalated),
+            "fraction": len(escalated) / len(complex_prompts) if complex_prompts else None,
+        },
     }
 
 
@@ -129,13 +131,12 @@ def savings(rows, catalog, expensive_model):
     return {"counterfactual_on_routed_tokens": counterfactual, "actual_lanes": actual}
 
 
-def build_summary(rows, catalog, expensive_model, quality_review=None):
+def build_summary(rows, catalog, expensive_model):
     return {
         "lanes": lane_summary(rows),
-        "routing": routing_summary(rows, catalog),
+        "routing": routing_summary(rows, catalog, expensive_model),
         "routed_model_mix": routed_model_mix(rows, catalog),
         "savings": savings(rows, catalog, expensive_model),
-        "quality_review": quality_review,
     }
 
 
@@ -147,33 +148,16 @@ def render_summary(summary):
     if routing:
         lines.extend(["", f"Corpus-label selection agreement (diagnostic): {routing['correct']}/{routing['total']} = {routing['accuracy']:.1%}", "expected_model,selected_model,count"])
         lines.extend(f"{item['expected_model']},{item['selected_model']},{item['count']}" for item in routing["confusion_matrix"])
+        escalation = routing["complex_prompt_escalation"]
+        if escalation["fraction"] is not None:
+            lines.append(
+                "Complex prompts escalated to the expensive model: "
+                f"{escalation['selected_expensive']}/{escalation['expected']} "
+                f"= {escalation['fraction']:.1%}"
+            )
     for label, values in (("Counterfactual savings on routed token counts", summary["savings"]["counterfactual_on_routed_tokens"]), ("Actual lane savings", summary["savings"]["actual_lanes"])):
         if values:
             lines.append(f"{label}: ${values['always_expensive_cost_usd']:.6f} always_expensive vs ${values['routed_cost_usd']:.6f} routed = {values['savings_fraction']:.1%}")
-    quality_review = summary["quality_review"]
-    if quality_review:
-        acceptance = quality_review["acceptance_comparison"]
-        pairwise = quality_review["pairwise"]
-        quality_scores = quality_review.get("quality_scores", {})
-        acceptance_value = acceptance.get("fraction")
-        acceptance_text = "unavailable" if acceptance_value is None else f"{acceptance_value:.1%}"
-        lines.extend((
-            "\nBlinded answer spot check",
-            f"Review coverage: {quality_review['reviewed']}/{quality_review['total']} = {quality_review['coverage_fraction']:.1%}",
-            "Acceptance compared with always-expensive baseline: "
-            f"{acceptance['routed_acceptable']}/{acceptance['always_expensive_acceptable']} "
-            f"= {acceptance_text}",
-            "Routed materially worse than the expensive baseline: "
-            f"{pairwise['routed_materially_worse_than_expensive']}/{pairwise['reviewed']}",
-        ))
-        if quality_scores:
-            lines.append(
-                "Average reviewer quality score: "
-                f"routed={quality_scores['routed']['average']:.2f}, "
-                f"always_expensive={quality_scores['always_expensive']['average']:.2f}"
-            )
-    else:
-        lines.append("\nBlinded answer spot check: pending")
     return "\n".join(lines) + "\n"
 
 
@@ -188,7 +172,6 @@ def main():
     parser.add_argument("results", type=Path)
     parser.add_argument("--catalog", required=True, type=Path)
     parser.add_argument("--expensive-model", default="gpt-5.5")
-    parser.add_argument("--quality-review", default="")
     parser.add_argument("--json-output", type=Path)
     parser.add_argument("--text-output", type=Path)
     args = parser.parse_args()
@@ -196,7 +179,6 @@ def main():
         load_results(args.results),
         load_catalog(args.catalog),
         args.expensive_model,
-        load_quality_review(args.quality_review),
     )
     rendered = render_summary(summary)
     if args.json_output:

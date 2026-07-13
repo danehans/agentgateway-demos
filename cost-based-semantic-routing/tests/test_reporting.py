@@ -1,8 +1,6 @@
-import csv
 import importlib.util
 import io
 import json
-import subprocess
 import tempfile
 import unittest
 from contextlib import redirect_stdout
@@ -33,15 +31,7 @@ render_experiment_chart = load_module(
     "render_experiment_chart",
     DEMO_DIR / "scripts" / "render_experiment_chart.py",
 )
-prepare_blind_review = load_module(
-    "prepare_blind_review",
-    DEMO_DIR / "scripts" / "prepare_blind_review.py",
-)
 run_eval = load_module("run_eval", DEMO_DIR / "scripts" / "run_eval.py")
-score_blind_review = load_module(
-    "score_blind_review",
-    DEMO_DIR / "scripts" / "score_blind_review.py",
-)
 corpus = load_module("corpus", DEMO_DIR / "scripts" / "corpus.py")
 summarize_results = load_module(
     "summarize_results", DEMO_DIR / "scripts" / "summarize_results.py"
@@ -251,18 +241,12 @@ class RenderExperimentChartTest(unittest.TestCase):
                         "latency_ms": {"p50": 2000, "p95": 3500},
                     },
                 },
-                "quality_review": {
-                    "reviewed": 20,
-                    "total": 20,
-                    "acceptance_comparison": {
-                        "routed_acceptable": 19,
-                        "always_expensive_acceptable": 20,
-                        "fraction": 0.95,
-                    },
-                    "pairwise": {
-                        "routed_materially_worse_than_expensive": 1,
-                        "reviewed": 20,
-                        "fraction": 0.05,
+                "routing": {
+                    "accuracy": 0.9,
+                    "complex_prompt_escalation": {
+                        "expected": 10,
+                        "selected_expensive": 8,
+                        "fraction": 0.8,
                     },
                 },
                 "routed_model_mix": {
@@ -291,8 +275,8 @@ class RenderExperimentChartTest(unittest.TestCase):
         self.assertEqual(source, "Catalog-priced agentgateway metrics")
         self.assertAlmostEqual(costs["routed"], 0.60)
         self.assertIn("40.0%", chart)
-        self.assertIn("95.0%", chart)
-        self.assertIn("19 routed / 20 expensive accepted", chart)
+        self.assertIn("90.0%", chart)
+        self.assertIn("8/10 complex prompts sent to GPT-5.5", chart)
         self.assertIn("12 gpt-5.4-nano | 8 gpt-5.5", chart)
         self.assertIn("2.50 s p50", chart)
         self.assertIn("Catalog-priced agentgateway metrics", chart)
@@ -310,7 +294,6 @@ class RenderExperimentChartTest(unittest.TestCase):
                         ("always_expensive", 1.00),
                     )
                 },
-                "quality_review": None,
             },
             "prometheus": {"status": "disabled"},
         }
@@ -415,113 +398,6 @@ class EvaluationToolingTest(unittest.TestCase):
             summary["savings"]["counterfactual_on_routed_tokens"]["always_expensive_cost_usd"],
             0.0006,
         )
-
-    def test_blind_review_scores_ab_spot_check_without_lane_names_in_csv(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            dataset = root / "demo.jsonl"
-            results = root / "results.jsonl"
-            review = root / "review.csv"
-            blind_key = root / "blind-key.json"
-            dataset.write_text(json.dumps({
-                "id": "developer-prompt",
-                "language": "go",
-                "family": "advanced_go",
-                "expected_model": "gpt-expensive",
-                "max_tokens": 100,
-                "prompt": "Diagnose this production Go failure.",
-            }) + "\n", encoding="utf-8")
-            result_rows = [
-                {
-                    "run_id": "quality-run",
-                    "id": "developer-prompt",
-                    "lane": lane,
-                    "selected_model": "gpt-expensive",
-                    "response_model": "gpt-expensive",
-                    "ok": True,
-                    "response_text": "Answer text",
-                }
-                for lane in ("routed", "always_expensive")
-            ]
-            results.write_text(
-                "\n".join(json.dumps(row) for row in result_rows) + "\n",
-                encoding="utf-8",
-            )
-
-            review_rows, key_rows, run_id = prepare_blind_review.review_rows(
-                prepare_blind_review.load_results(results),
-                corpus.load_corpus(dataset),
-                seed=7,
-            )
-            prepare_blind_review.write_review(review, review_rows)
-            prepare_blind_review.write_key(blind_key, run_id, results, key_rows)
-            instructions = root / "review-instructions.md"
-            prepare_blind_review.write_instructions(instructions)
-            review_text = review.read_text(encoding="utf-8")
-            self.assertNotIn("always_expensive", review_text)
-            self.assertIn("two shuffled answers", instructions.read_text(encoding="utf-8"))
-
-            with review.open(encoding="utf-8", newline="") as stream:
-                completed = list(csv.DictReader(stream))
-            mapping = key_rows[0]["answer_mapping"]
-            for letter in ("a", "b"):
-                completed[0][f"answer_{letter}_quality_1_to_5"] = "4"
-                completed[0][f"answer_{letter}_acceptable_yes_no"] = "yes"
-            expensive_letter = next(
-                letter for letter, value in mapping.items()
-                if value["lane"] == "always_expensive"
-            )
-            completed[0]["materially_better_answer_a_b_none_unclear"] = expensive_letter
-            with review.open("w", encoding="utf-8", newline="") as stream:
-                writer = csv.DictWriter(
-                    stream, fieldnames=prepare_blind_review.REVIEW_FIELDS
-                )
-                writer.writeheader()
-                writer.writerows(completed)
-
-            key = score_blind_review.load_key(blind_key)
-            completed_reviews = score_blind_review.load_completed_reviews(review, key)
-            quality = score_blind_review.score(completed_reviews, 1, "quality-run")
-
-            self.assertEqual(quality["acceptance_comparison"]["fraction"], 1.0)
-            self.assertEqual(quality["pairwise"]["routed_materially_worse_than_expensive"], 1)
-
-    def test_captured_run_rejects_empty_answer_text(self):
-        with tempfile.TemporaryDirectory() as directory:
-            results = Path(directory) / "results.jsonl"
-            rows = [
-                {
-                    "lane": "routed",
-                    "ok": True,
-                    "response_text": "",
-                    "vsr_headers": {"x-vsr-selected-decision": "route_to_low_cost"},
-                },
-                {
-                    "lane": "always_expensive",
-                    "ok": True,
-                    "response_text": "A complete answer.",
-                },
-            ]
-            results.write_text(
-                "\n".join(json.dumps(row) for row in rows) + "\n",
-                encoding="utf-8",
-            )
-
-            completed = subprocess.run(
-                [
-                    "python3",
-                    str(DEMO_DIR / "scripts" / "validate_results.py"),
-                    str(results),
-                    "--require-response-text",
-                ],
-                check=False,
-                capture_output=True,
-                text=True,
-            )
-
-            self.assertNotEqual(completed.returncode, 0)
-            self.assertIn("had no assistant response text", completed.stdout)
-
 
 class VerifyObservabilityTest(unittest.TestCase):
     def test_extracts_prometheus_values(self):

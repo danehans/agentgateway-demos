@@ -60,7 +60,6 @@ def parse_args():
     parser.add_argument("--limit", type=int, default=0)
     parser.add_argument("--seed", type=int, default=7)
     parser.add_argument("--delay-sec", type=float, default=0.0)
-    parser.add_argument("--capture-output", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     return parser.parse_args()
 
@@ -164,13 +163,6 @@ def usage(body):
     }
 
 
-def response_text(body):
-    choices = body.get("choices", []) if isinstance(body, dict) else []
-    message = choices[0].get("message", {}) if choices else {}
-    content = message.get("content", "")
-    return content if isinstance(content, str) else json.dumps(content, ensure_ascii=False)
-
-
 def request_messages(args, item):
     messages = item.get("messages")
     if not isinstance(messages, list) or not messages:
@@ -236,9 +228,7 @@ def run_one(args, catalog, url, item, lane):
         "vsr_headers": {name: response_headers.get(name, "") for name in VSR_HEADERS},
         "error": error,
     }
-    if args.capture_output:
-        record["response_text"] = response_text(body)
-    elif not record["ok"]:
+    if not record["ok"]:
         record["error_body"] = body
     return record
 

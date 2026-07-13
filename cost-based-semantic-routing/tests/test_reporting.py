@@ -1,3 +1,4 @@
+import csv
 import importlib.util
 import io
 import json
@@ -31,7 +32,15 @@ render_experiment_chart = load_module(
     "render_experiment_chart",
     DEMO_DIR / "scripts" / "render_experiment_chart.py",
 )
+prepare_blind_review = load_module(
+    "prepare_blind_review",
+    DEMO_DIR / "scripts" / "prepare_blind_review.py",
+)
 run_eval = load_module("run_eval", DEMO_DIR / "scripts" / "run_eval.py")
+score_blind_review = load_module(
+    "score_blind_review",
+    DEMO_DIR / "scripts" / "score_blind_review.py",
+)
 corpus = load_module("corpus", DEMO_DIR / "scripts" / "corpus.py")
 summarize_results = load_module(
     "summarize_results", DEMO_DIR / "scripts" / "summarize_results.py"
@@ -241,7 +250,20 @@ class RenderExperimentChartTest(unittest.TestCase):
                         "latency_ms": {"p50": 2000, "p95": 3500},
                     },
                 },
-                "routing": {"accuracy": 0.8, "correct": 16, "total": 20},
+                "quality_review": {
+                    "reviewed": 20,
+                    "total": 20,
+                    "quality_retention": {
+                        "routed_acceptable": 19,
+                        "always_expensive_acceptable": 20,
+                        "fraction": 0.95,
+                    },
+                    "pairwise": {
+                        "routed_materially_worse_than_expensive": 1,
+                        "reviewed": 20,
+                        "fraction": 0.05,
+                    },
+                },
             },
             "prometheus": {
                 "status": "collected",
@@ -262,7 +284,8 @@ class RenderExperimentChartTest(unittest.TestCase):
         self.assertEqual(source, "Catalog-priced agentgateway metrics")
         self.assertAlmostEqual(costs["routed"], 0.60)
         self.assertIn("40.0%", chart)
-        self.assertIn("16 / 20", chart)
+        self.assertIn("95.0%", chart)
+        self.assertIn("19 routed / 20 expensive accepted", chart)
         self.assertIn("2.50 s p50", chart)
         self.assertIn("Catalog-priced agentgateway metrics", chart)
 
@@ -280,7 +303,7 @@ class RenderExperimentChartTest(unittest.TestCase):
                         ("always_expensive", 1.00),
                     )
                 },
-                "routing": {"accuracy": 1.0, "correct": 1, "total": 1},
+                "quality_review": None,
             },
             "prometheus": {"status": "disabled"},
         }
@@ -322,7 +345,7 @@ class EvaluationToolingTest(unittest.TestCase):
         )
 
     def test_default_corpus_has_expected_model_mix(self):
-        dataset = DEMO_DIR / "data" / "eval-corpus.jsonl"
+        dataset = DEMO_DIR / "data" / "tuning-corpus.jsonl"
         conversations = [
             json.loads(line)
             for line in dataset.read_text(encoding="utf-8").splitlines()
@@ -353,7 +376,7 @@ class EvaluationToolingTest(unittest.TestCase):
         self.assertTrue(all(len(row["messages"]) == 7 for row in final_turns))
 
     def test_limited_corpus_is_model_balanced(self):
-        dataset = DEMO_DIR / "data" / "eval-corpus.jsonl"
+        dataset = DEMO_DIR / "data" / "tuning-corpus.jsonl"
         rows = corpus.load_corpus(dataset)
 
         selected = corpus.balanced_subset(rows, 50)
@@ -370,8 +393,8 @@ class EvaluationToolingTest(unittest.TestCase):
         self.assertEqual(selected, corpus.balanced_subset(rows, 50))
 
     def test_fixed_manifest_preserves_tuning_subset(self):
-        dataset = DEMO_DIR / "data" / "eval-corpus.jsonl"
-        manifest = DEMO_DIR / "data" / "eval-50-manifest.json"
+        dataset = DEMO_DIR / "data" / "tuning-corpus.jsonl"
+        manifest = DEMO_DIR / "data" / "tuning-50-manifest.json"
         rows = corpus.load_corpus(dataset)
 
         selected = corpus.manifest_subset(rows, manifest)
@@ -419,7 +442,7 @@ class EvaluationToolingTest(unittest.TestCase):
         ]
 
         summary = summarize_results.build_summary(
-            rows, {}, self.catalog, "gpt-expensive"
+            rows, self.catalog, "gpt-expensive"
         )
 
         self.assertEqual(summary["routing"]["accuracy"], 1.0)
@@ -427,6 +450,83 @@ class EvaluationToolingTest(unittest.TestCase):
             summary["savings"]["counterfactual_on_routed_tokens"]["always_expensive_cost_usd"],
             0.0006,
         )
+
+    def test_blind_review_scores_quality_retention_without_lane_names_in_csv(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            dataset = root / "holdout.jsonl"
+            results = root / "results.jsonl"
+            review = root / "review.csv"
+            blind_key = root / "blind-key.json"
+            dataset.write_text(json.dumps({
+                "id": "private-holdout",
+                "language": "go",
+                "turns": [{
+                    "family": "holdout_go",
+                    "expected_model": "gpt-expensive",
+                    "max_tokens": 100,
+                    "user": "Diagnose this production Go failure.",
+                }],
+            }) + "\n", encoding="utf-8")
+            result_rows = [
+                {
+                    "run_id": "quality-run",
+                    "id": "private-holdout-turn-1",
+                    "lane": lane,
+                    "selected_model": "gpt-expensive" if lane != "always_low_cost" else "gpt-cheap",
+                    "response_model": "gpt-expensive" if lane != "always_low_cost" else "gpt-cheap",
+                    "ok": True,
+                    "response_text": "Answer text",
+                }
+                for lane in ("routed", "always_low_cost", "always_expensive")
+            ]
+            results.write_text(
+                "\n".join(json.dumps(row) for row in result_rows) + "\n",
+                encoding="utf-8",
+            )
+
+            review_rows, key_rows, run_id = prepare_blind_review.review_rows(
+                prepare_blind_review.load_results(results),
+                corpus.load_corpus(dataset),
+                seed=7,
+            )
+            prepare_blind_review.write_review(review, review_rows)
+            prepare_blind_review.write_key(blind_key, run_id, results, key_rows)
+            instructions = root / "review-instructions.md"
+            prepare_blind_review.write_instructions(instructions)
+            review_text = review.read_text(encoding="utf-8")
+            self.assertNotIn("always_expensive", review_text)
+            self.assertNotIn("always_low_cost", review_text)
+            self.assertIn("Do not try to infer the model", instructions.read_text(encoding="utf-8"))
+
+            with review.open(encoding="utf-8", newline="") as stream:
+                completed = list(csv.DictReader(stream))
+            mapping = key_rows[0]["answer_mapping"]
+            for letter in ("a", "b", "c"):
+                lane = mapping[letter]["lane"]
+                completed[0][f"answer_{letter}_quality_1_to_5"] = "4"
+                completed[0][f"answer_{letter}_acceptable_yes_no"] = (
+                    "no" if lane == "always_low_cost" else "yes"
+                )
+            expensive_letter = next(
+                letter for letter, value in mapping.items()
+                if value["lane"] == "always_expensive"
+            )
+            completed[0]["materially_best_answer_a_b_c_none_unclear"] = expensive_letter
+            with review.open("w", encoding="utf-8", newline="") as stream:
+                writer = csv.DictWriter(
+                    stream, fieldnames=prepare_blind_review.REVIEW_FIELDS
+                )
+                writer.writeheader()
+                writer.writerows(completed)
+
+            key = score_blind_review.load_key(blind_key)
+            completed_reviews = score_blind_review.load_completed_reviews(review, key)
+            quality = score_blind_review.score(completed_reviews, 1, "quality-run")
+
+            self.assertEqual(quality["quality_retention"]["fraction"], 1.0)
+            self.assertEqual(quality["pairwise"]["routed_materially_worse_than_expensive"], 1)
+            self.assertEqual(quality["capability_need"]["high_required"], 1)
 
 
 class VerifyObservabilityTest(unittest.TestCase):

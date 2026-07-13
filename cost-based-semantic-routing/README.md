@@ -3,7 +3,9 @@
 This demo combines agentgateway and vLLM Semantic Router (vSR) to route routine
 prompts to a lower-cost model and advanced prompts to a higher-capability model.
 It then measures whether that policy reduces realized LLM cost without hiding
-the effects on routing accuracy, answer quality, or latency.
+the effects on answer quality or latency. The checked-in corpus is a tuning
+fixture; publication-quality outcome claims require a separate frozen holdout
+and blinded review.
 
 The reusable routing configuration comes from the agentgateway semantic-routing
 example. This repository owns the disposable cluster, forced-model baselines,
@@ -71,10 +73,11 @@ namespaces. The script intentionally ignores generic `NAMESPACE` and
 The default evaluation replays 50 four-turn Go and Rust developer conversations:
 200 routing decisions across routine, escalating, and advanced work. Each turn
 includes its canonical prior user and assistant context, so later requests
-exercise a realistic growing transcript. It first runs a two-turn smoke test
-and stops if either model is unavailable, preventing a full run of known
-failures. Each corpus turn is sent through the three lanes, for 600 billable
-model requests.
+exercise a realistic growing transcript. This checked-in data is intentionally
+for tuning and regression checks, not a proxy for production quality. It first
+runs a two-turn smoke test and stops if either model is unavailable, preventing
+a full run of known failures. Each corpus turn is sent through the three lanes,
+for 600 billable model requests.
 
 ## What the script does
 
@@ -92,7 +95,7 @@ model requests.
 8. Verifies buffered ExtProc by routing small routine and advanced coding
    prompts to their expected models.
 9. Sends every selected corpus turn through `routed`, `always_low_cost`, and
-   `always_expensive`, then summarizes cost, accuracy, and latency.
+   `always_expensive`, then summarizes cost, tuning agreement, and latency.
 
 Every phase is gated by a post-install check. The script stops at the first
 component that remains unhealthy after its retry window:
@@ -134,8 +137,8 @@ agentgateway revision:
 - `k8s/semantic-router-values.yaml`
 - `k8s/agentgateway-routing.yaml`
 
-The corpus, runner, local summary, baseline routes, ratings template, PromQL
-reference, and chart renderer live in this repository. The forced lanes accept
+The corpus, runner, local summary, baseline routes, blinded-review tooling,
+PromQL reference, and chart renderer live in this repository. The forced lanes accept
 the `X-Eval-Lane` header only in the dedicated demo cluster; they are not part
 of the upstream routing configuration.
 
@@ -165,6 +168,8 @@ EXAMPLE_REF=<agentgateway-commit-sha> ./demo.sh refresh
 ./demo.sh eval        # Run the paid smoke test and experiment
 ./demo.sh report      # Regenerate local and Prometheus summary artifacts
 ./demo.sh chart       # Render an SVG chart from the latest result summary
+./demo.sh review      # Create a blinded answer-quality review package
+./demo.sh score       # Score the completed review and refresh report/chart
 ./demo.sh status      # Inspect resources and the resolved upstream revision
 ./demo.sh dashboard   # Open a Grafana port-forward on localhost:3000
 ./demo.sh cleanup     # Delete the dedicated cluster
@@ -179,13 +184,14 @@ For a smaller evaluation:
 EVAL_LIMIT=50 ./demo.sh eval --yes
 ```
 
-`EVAL_LIMIT=50` uses the checked-in [fixed selection manifest](data/eval-50-manifest.json),
+`EVAL_LIMIT=50` uses the checked-in [fixed tuning manifest](data/tuning-50-manifest.json),
 which contains 25 expected lower-cost and 25 expected expensive selections.
 It sends 150 corpus requests and lets tuning runs compare exactly the same
-prompts, even when corpus labels change. The separate two-turn smoke test sends
-six additional requests. Other nonzero values select a deterministic,
-model-balanced subset. Set `EVAL_MANIFEST=/path/to/manifest.json` to use a
-different fixed set; it must contain the same number of IDs as `EVAL_LIMIT`.
+prompts. Do not use its label agreement as a publication-quality quality metric.
+The separate two-turn smoke test sends six additional requests. Other nonzero
+values select a deterministic, model-balanced subset. Set
+`EVAL_MANIFEST=/path/to/manifest.json` to use a different fixed set; it must
+contain the same number of IDs as `EVAL_LIMIT`.
 
 For a lower-resource metrics-only stack:
 
@@ -213,11 +219,14 @@ full profile is enabled.
 Results are written to `results/`:
 
 - `<RUN_ID>.jsonl`: request-level decisions, usage, cost estimate, and latency
-- `<RUN_ID>-metadata.json`: component versions and resolved example SHA
-- `<RUN_ID>-ratings.csv`: created when `CAPTURE_OUTPUT=true`
+- `<RUN_ID>-metadata.json`: component versions, source revision, dataset role, and dataset hash
+- `<RUN_ID>-blind-review.csv`: anonymized transcripts and shuffled A/B/C answers
+- `<RUN_ID>-blind-review-instructions.md`: rubric supplied to reviewers
+- `<RUN_ID>-blind-review-key.json`: lane/model mapping; keep this from reviewers
+- `<RUN_ID>-quality-review.json`: scored blinded-review outcomes
 - `<RUN_ID>-summary.json`: structured local and catalog-backed Prometheus results
-- `<RUN_ID>-summary.txt`: readable cost, accuracy, satisfaction, and latency report
-- `<RUN_ID>-chart.svg`: blog-ready comparison of spend, selection accuracy, and latency
+- `<RUN_ID>-summary.txt`: readable cost, quality, and latency report
+- `<RUN_ID>-chart.svg`: blog-ready comparison of spend, quality retention, and latency
 
 The local summary estimates cost from response token usage and the example's
 rate table. The experiment-scoped Prometheus summary uses the run's unique
@@ -249,9 +258,9 @@ SUMMARY_FILE=results/<RUN_ID>-summary.json ./demo.sh chart
 ```
 
 The SVG compares the routed lane with the always-expensive counterfactual,
-shows corpus-label model-selection accuracy, and reports routed p50/p95 latency.
-It is intentionally a compact companion to the JSON rather than a replacement
-for the full per-request evidence.
+reports blinded quality retention when available, and shows routed p50/p95
+latency. Before review is scored, it explicitly reports quality as pending;
+it never presents corpus-label agreement as an outcome-quality result.
 
 ## Tune the routing policy
 
@@ -276,30 +285,68 @@ Redeploy and rerun after editing:
 Review false negatives first: advanced prompts sent to the lower-cost model.
 Then inspect false positives, where routine prompts consumed the expensive
 model. Keep `EVAL_LIMIT=50` for tuning comparisons so each iteration uses the
-same prompt set. A production threshold should optimize for an explicit quality
-SLO, not the highest possible savings percentage.
+same prompt set. Freeze the routing policy before evaluating a holdout; do not
+adjust it after looking at holdout misses. A production threshold should
+optimize for an explicit quality SLO, not the highest possible savings
+percentage.
 
 `./demo.sh refresh` discards local tuning and fetches `EXAMPLE_REF` again.
 
-## Evaluate satisfaction
+## Measure answer quality
 
-Capture response text for blinded human review:
+The tuning corpus answers whether a routing policy behaves consistently. It
+does not establish that lower-cost answers meet a real developer's quality bar.
+For a publishable result, use a separate, frozen holdout of complete developer
+conversations. Keep every turn of a conversation in one split, sample approved
+and redacted production-like work where possible, and include both routine
+tasks containing advanced terms and advanced tasks that avoid the policy's
+marker phrases.
+
+Run that holdout through all three lanes with response capture enabled:
 
 ```bash
-CAPTURE_OUTPUT=true ./demo.sh eval
+EVAL_DATASET=/absolute/path/holdout-corpus.jsonl \
+EVAL_DATASET_ROLE=holdout \
+CAPTURE_OUTPUT=true \
+./demo.sh eval --yes
 ```
 
-Fill in the generated ratings CSV with a satisfaction score and whether the
-router chose the right model. Then regenerate the persisted summaries; the
-ratings file is detected automatically:
+`EVAL_DATASET_ROLE=holdout` and the dataset SHA-256 are persisted in the run
+metadata. The script accepts the same JSONL schema as the tuning corpus. Keep
+the holdout outside this public repository when it contains approved internal
+traffic.
+
+Create the blinded review package after the run:
 
 ```bash
-RESULT_FILE=results/<RUN_ID>.jsonl ./demo.sh report
+RESULT_FILE=results/<RUN_ID>.jsonl ./demo.sh review
 ```
 
-`CAPTURE_OUTPUT=true` stores response text in the request-level JSONL and
-creates the ratings CSV. It does not redirect the command's terminal output;
-the `-summary.json` and `-summary.txt` files are created independently.
+Give reviewers `<RUN_ID>-blind-review.csv` and its instructions, not the
+corresponding key.
+For each A/B/C answer, reviewers record a 1-to-5 quality score, whether it is
+acceptable for the task, and whether one answer is materially better. After
+ratings are complete, score and regenerate the report:
+
+```bash
+RESULT_FILE=results/<RUN_ID>.jsonl ./demo.sh score
+```
+
+The primary outcome is **quality retained**:
+
+```text
+acceptable routed answers / acceptable always-expensive answers
+```
+
+The summary also reports blinded-review coverage and how often the routed answer
+was materially worse than the expensive baseline. These answer-quality measures
+belong next to savings and latency. Corpus-label selection agreement remains in
+the JSON and text report as a tuning diagnostic only.
+
+Blinded review is a quality proxy, not direct user satisfaction. Before broad
+rollout, validate the policy in shadow mode against sanitized production traffic
+and pair it with product signals such as task completion, explicit feedback,
+retry rate, and escalation rate.
 
 ## Model availability
 

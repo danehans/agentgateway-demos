@@ -52,16 +52,12 @@ def cost_data(summary):
 def metric_data(summary):
     local = summary.get("local", {})
     lanes = local.get("lanes", {})
-    routing = local.get("routing", {})
     required_lanes = ("routed", "always_expensive")
     if not all(lane in lanes for lane in required_lanes):
         raise ValueError("summary does not contain routed and always-expensive latency")
-    if not {"accuracy", "correct", "total"}.issubset(routing):
-        raise ValueError("summary does not contain routing accuracy")
+    quality_review = local.get("quality_review")
     return {
-        "accuracy": float(routing["accuracy"]),
-        "correct": int(routing["correct"]),
-        "total": int(routing["total"]),
+        "quality_review": quality_review,
         "routed_p50": float(lanes["routed"]["latency_ms"]["p50"]) / 1000,
         "routed_p95": float(lanes["routed"]["latency_ms"]["p95"]) / 1000,
         "expensive_p50": float(lanes["always_expensive"]["latency_ms"]["p50"]) / 1000,
@@ -97,11 +93,30 @@ def render_chart(summary):
             f'<text class="value" x="665" y="{y + 17}">${costs[lane]:.4f}</text>',
         ))
 
-    accuracy_width = max(0, min(1, metrics["accuracy"])) * 230
+    quality_review = metrics["quality_review"]
+    quality = quality_review.get("quality_retention") if quality_review else None
+    quality_fraction = quality.get("fraction") if quality else None
+    quality_width = max(0, min(1, quality_fraction or 0)) * 230
+    quality_pending = quality_fraction is None
+    quality_value = "Pending" if quality_pending else f"{quality_fraction:.1%}"
+    if quality_pending:
+        quality_detail = "Blinded answer-quality review required"
+        review_detail = "Create and score a blinded review package"
+        review_value = "Pending"
+    else:
+        quality_detail = (
+            f"{quality['routed_acceptable']} routed / "
+            f"{quality['always_expensive_acceptable']} expensive accepted"
+        )
+        review_detail = (
+            f"{quality_review['reviewed']} of {quality_review['total']} "
+            "responses reviewed blind"
+        )
+        review_value = f"{quality_review['reviewed']} / {quality_review['total']}"
     p50_delta = f"{p50_change:+.1%}"
     return f'''<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="570" viewBox="0 0 {width} 570" role="img" aria-labelledby="title description">
   <title id="title">Semantic routing experiment results</title>
-  <desc id="description">Semantic routing cost, selection accuracy, and latency for run {text(run_id)}.</desc>
+  <desc id="description">Semantic routing cost, answer-quality review, and latency for run {text(run_id)}.</desc>
   <style>
     text {{ font-family: Arial, Helvetica, sans-serif; fill: #0f172a; }}
     .title {{ font-size: 26px; font-weight: 700; }}
@@ -122,9 +137,9 @@ def render_chart(summary):
   <text class="kpi-value" x="48" y="151">{savings:.1%}</text>
   <text class="subtitle" x="48" y="173">Routed versus always expensive</text>
   <line x1="337" y1="112" x2="337" y2="177" stroke="#cbd5e1"/>
-  <text class="kpi-label" x="370" y="121">MODEL SELECTION</text>
-  <text class="kpi-value" x="370" y="151">{metrics['accuracy']:.1%}</text>
-  <text class="subtitle" x="370" y="173">{metrics['correct']} of {metrics['total']} corpus labels matched</text>
+  <text class="kpi-label" x="370" y="121">QUALITY RETAINED</text>
+  <text class="kpi-value" x="370" y="151">{quality_value}</text>
+  <text class="subtitle" x="370" y="173">{text(quality_detail)}</text>
   <line x1="655" y1="112" x2="655" y2="177" stroke="#cbd5e1"/>
   <text class="kpi-label" x="688" y="121">ROUTED P50 LATENCY</text>
   <text class="kpi-value" x="688" y="151">{metrics['routed_p50']:.2f} s</text>
@@ -134,11 +149,11 @@ def render_chart(summary):
   {''.join(bars)}
   <line x1="48" y1="405" x2="912" y2="405" stroke="#cbd5e1"/>
 
-  <text class="section" x="48" y="440">ROUTING ACCURACY</text>
+  <text class="section" x="48" y="440">BLINDED QUALITY REVIEW</text>
   <rect x="48" y="455" width="230" height="18" fill="#e2e8f0"/>
-  <rect x="48" y="455" width="{accuracy_width:.1f}" height="18" fill="#0f766e"/>
-  <text class="metric" x="48" y="505">{metrics['correct']} / {metrics['total']}</text>
-  <text class="metric-detail" x="48" y="525">Expected model selected</text>
+  <rect x="48" y="455" width="{quality_width:.1f}" height="18" fill="#0f766e"/>
+  <text class="metric" x="48" y="505">{text(review_value)}</text>
+  <text class="metric-detail" x="48" y="525">{text(review_detail)}</text>
 
   <line x1="337" y1="431" x2="337" y2="525" stroke="#cbd5e1"/>
   <text class="section" x="370" y="440">END-TO-END LATENCY</text>

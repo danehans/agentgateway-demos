@@ -254,7 +254,7 @@ def build_conversations():
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--output", type=Path, default=ROOT_DIR / "data" / "eval-corpus.jsonl")
+    parser.add_argument("--output", type=Path, default=ROOT_DIR / "data" / "tuning-corpus.jsonl")
     args = parser.parse_args()
 
     conversations = build_conversations()

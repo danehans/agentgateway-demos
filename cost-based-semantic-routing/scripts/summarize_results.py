@@ -2,7 +2,6 @@
 """Summarize one local semantic-routing experiment result file."""
 
 import argparse
-import csv
 import json
 import math
 import sys
@@ -29,11 +28,16 @@ def load_results(path):
         return [json.loads(line) for line in stream if line.strip()]
 
 
-def load_ratings(path):
+def load_quality_review(path):
     if not path:
-        return {}
+        return None
     with Path(path).open(encoding="utf-8") as stream:
-        return {(row["id"], row["lane"]): row for row in csv.DictReader(stream)}
+        review = json.load(stream)
+    required = {"reviewed", "total", "quality_retention", "pairwise"}
+    missing = sorted(required - set(review))
+    if missing:
+        raise ValueError(f"{path}: quality review is missing: {', '.join(missing)}")
+    return review
 
 
 def lane_summary(rows):
@@ -109,30 +113,12 @@ def savings(rows, catalog, expensive_model):
     return {"counterfactual_on_routed_tokens": counterfactual, "actual_lanes": actual}
 
 
-def satisfaction_summary(rows, ratings):
-    if not ratings:
-        return None
-    scores, right_model = defaultdict(list), []
-    for row in rows:
-        rating = ratings.get((row["id"], row["lane"]))
-        if not rating:
-            continue
-        if rating.get("satisfaction"):
-            scores[row["lane"]].append(float(rating["satisfaction"]))
-        if row["lane"] == "routed" and rating.get("right_model"):
-            right_model.append(rating["right_model"].strip().lower() in ("1", "true", "yes", "y"))
-    return {
-        "lanes": {lane: {"average": sum(values) / len(values), "count": len(values)} for lane, values in sorted(scores.items())},
-        "human_right_model": {"correct": sum(right_model), "total": len(right_model), "rate": sum(right_model) / len(right_model)} if right_model else None,
-    }
-
-
-def build_summary(rows, ratings, catalog, expensive_model):
+def build_summary(rows, catalog, expensive_model, quality_review=None):
     return {
         "lanes": lane_summary(rows),
         "routing": routing_summary(rows, catalog),
         "savings": savings(rows, catalog, expensive_model),
-        "satisfaction": satisfaction_summary(rows, ratings),
+        "quality_review": quality_review,
     }
 
 
@@ -142,15 +128,42 @@ def render_summary(summary):
         lines.append(f"{lane},{values['requests']},{values['ok']},{values['input_tokens']},{values['output_tokens']},${values['cost_estimate_usd']:.6f},{values['latency_ms']['p50']:.1f},{values['latency_ms']['p95']:.1f}")
     routing = summary["routing"]
     if routing:
-        lines.extend(["", f"Routing accuracy: {routing['correct']}/{routing['total']} = {routing['accuracy']:.1%}", "expected_model,selected_model,count"])
+        lines.extend(["", f"Corpus-label selection agreement (diagnostic): {routing['correct']}/{routing['total']} = {routing['accuracy']:.1%}", "expected_model,selected_model,count"])
         lines.extend(f"{item['expected_model']},{item['selected_model']},{item['count']}" for item in routing["confusion_matrix"])
     for label, values in (("Counterfactual savings on routed token counts", summary["savings"]["counterfactual_on_routed_tokens"]), ("Actual lane savings", summary["savings"]["actual_lanes"])):
         if values:
             lines.append(f"{label}: ${values['always_expensive_cost_usd']:.6f} always_expensive vs ${values['routed_cost_usd']:.6f} routed = {values['savings_fraction']:.1%}")
-    satisfaction = summary["satisfaction"]
-    if satisfaction:
-        lines.append("\nSatisfaction")
-        lines.extend(f"{lane}: avg={values['average']:.2f} n={values['count']}" for lane, values in satisfaction["lanes"].items())
+    quality_review = summary["quality_review"]
+    if quality_review:
+        retention = quality_review["quality_retention"]
+        pairwise = quality_review["pairwise"]
+        capability_need = quality_review.get("capability_need", {})
+        quality_scores = quality_review.get("quality_scores", {})
+        retention_value = retention.get("fraction")
+        retention_text = "unavailable" if retention_value is None else f"{retention_value:.1%}"
+        lines.extend((
+            "\nBlinded answer-quality review",
+            f"Review coverage: {quality_review['reviewed']}/{quality_review['total']} = {quality_review['coverage_fraction']:.1%}",
+            "Quality retained: "
+            f"{retention['routed_acceptable']}/{retention['always_expensive_acceptable']} "
+            f"= {retention_text}",
+            "Routed materially worse than the expensive baseline: "
+            f"{pairwise['routed_materially_worse_than_expensive']}/{pairwise['reviewed']}",
+        ))
+        if capability_need:
+            lines.append(
+                "High-required tasks routed to the lower-cost model: "
+                f"{capability_need['high_required_routed_low_cost']}/"
+                f"{capability_need['high_required']}"
+            )
+        if quality_scores:
+            lines.append(
+                "Average reviewer quality score: "
+                f"routed={quality_scores['routed']['average']:.2f}, "
+                f"always_expensive={quality_scores['always_expensive']['average']:.2f}"
+            )
+    else:
+        lines.append("\nBlinded answer-quality review: pending")
     return "\n".join(lines) + "\n"
 
 
@@ -165,11 +178,16 @@ def main():
     parser.add_argument("results", type=Path)
     parser.add_argument("--catalog", required=True, type=Path)
     parser.add_argument("--expensive-model", default="gpt-5.5")
-    parser.add_argument("--ratings", default="")
+    parser.add_argument("--quality-review", default="")
     parser.add_argument("--json-output", type=Path)
     parser.add_argument("--text-output", type=Path)
     args = parser.parse_args()
-    summary = build_summary(load_results(args.results), load_ratings(args.ratings), load_catalog(args.catalog), args.expensive_model)
+    summary = build_summary(
+        load_results(args.results),
+        load_catalog(args.catalog),
+        args.expensive_model,
+        load_quality_review(args.quality_review),
+    )
     rendered = render_summary(summary)
     if args.json_output:
         write(args.json_output, summary, lambda value: json.dumps(value, indent=2, sort_keys=True) + "\n")

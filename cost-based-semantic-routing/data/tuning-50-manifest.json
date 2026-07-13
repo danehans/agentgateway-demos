@@ -1,5 +1,5 @@
 {
-  "description": "Fixed 50-turn tuning and publication subset from eval-corpus.jsonl.",
+  "description": "Fixed 50-turn tuning subset from tuning-corpus.jsonl.",
   "ids": [
     "go-advanced-config-rollout-turn-3",
     "go-advanced-etcd-election-turn-1",

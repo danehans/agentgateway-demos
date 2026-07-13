@@ -39,7 +39,7 @@ def parse_args():
     )
     parser.add_argument("--gateway-url", default="")
     parser.add_argument("--path", default="/v1/chat/completions")
-    parser.add_argument("--dataset", default=ROOT_DIR / "data" / "eval-corpus.jsonl", type=Path)
+    parser.add_argument("--dataset", default=ROOT_DIR / "data" / "tuning-corpus.jsonl", type=Path)
     parser.add_argument("--catalog", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--run-id", default=datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ"))

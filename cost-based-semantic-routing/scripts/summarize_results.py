@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Summarize one local semantic-routing experiment result file."""
+"""Summarize one local semantic-routing evaluation result file."""
 
 import argparse
 import json
@@ -146,7 +146,7 @@ def render_summary(summary):
         lines.append(f"{lane},{values['requests']},{values['ok']},{values['input_tokens']},{values['output_tokens']},${values['cost_estimate_usd']:.6f},{values['latency_ms']['p50']:.1f},{values['latency_ms']['p95']:.1f}")
     routing = summary["routing"]
     if routing:
-        lines.extend(["", f"Corpus-label selection agreement (diagnostic): {routing['correct']}/{routing['total']} = {routing['accuracy']:.1%}", "expected_model,selected_model,count"])
+        lines.extend(["", f"Dataset-label selection agreement (diagnostic): {routing['correct']}/{routing['total']} = {routing['accuracy']:.1%}", "expected_model,selected_model,count"])
         lines.extend(f"{item['expected_model']},{item['selected_model']},{item['count']}" for item in routing["confusion_matrix"])
         escalation = routing["complex_prompt_escalation"]
         if escalation["fraction"] is not None:

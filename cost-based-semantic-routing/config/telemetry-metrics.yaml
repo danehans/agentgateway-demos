@@ -14,5 +14,5 @@ spec:
         add:
         - name: eval_lane
           expression: 'request.headers["x-eval-lane"]'
-        - name: experiment_id
-          expression: 'request.headers["x-experiment-id"]'
+        - name: evaluation_id
+          expression: 'request.headers["x-evaluation-id"]'

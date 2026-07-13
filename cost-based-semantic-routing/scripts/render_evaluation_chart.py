@@ -108,7 +108,7 @@ def render_chart(summary):
     )
     agreement, escalation_detail, escalation_fraction = routing_metrics(metrics["routing"])
     mix_detail, cheap_fraction = model_mix_detail(metrics["model_mix"])
-    run_id = summary.get("run_id", "semantic-routing-experiment")
+    run_id = summary.get("run_id", "semantic-routing-evaluation")
     max_cost = max(costs.values())
 
     bars = []
@@ -123,7 +123,7 @@ def render_chart(summary):
         ))
 
     return f'''<svg xmlns="http://www.w3.org/2000/svg" width="960" height="570" viewBox="0 0 960 570" role="img" aria-labelledby="title description">
-  <title id="title">Semantic routing experiment results</title>
+  <title id="title">Semantic routing evaluation results</title>
   <desc id="description">Semantic routing spend, routing agreement, model mix, and latency for run {text(run_id)}.</desc>
   <style>
     text {{ font-family: Arial, Helvetica, sans-serif; fill: #0f172a; }}
@@ -137,7 +137,7 @@ def render_chart(summary):
     .metric-detail {{ font-size: 13px; fill: #475569; }}
   </style>
   <rect width="960" height="570" fill="#ffffff"/>
-  <text class="title" x="48" y="46">Semantic routing experiment</text>
+  <text class="title" x="48" y="46">Semantic routing evaluation</text>
   <text class="subtitle" x="48" y="70">Run {text(run_id)} | {text(cost_source)}</text>
   <line x1="48" y1="91" x2="912" y2="91" stroke="#cbd5e1"/>
 

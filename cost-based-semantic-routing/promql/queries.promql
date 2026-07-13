@@ -1,12 +1,12 @@
 # Replace RUN_ID with one value from results/<RUN_ID>.jsonl. Every query is
-# scoped to the experiment label, so unrelated traffic cannot affect the result.
+# scoped to the evaluation label, so unrelated traffic cannot affect the result.
 
 # Confirm exact catalog lookups and the selected models by evaluation lane.
 sum by (eval_lane, status, gen_ai_request_model, gen_ai_response_model) (
   agentgateway_cost_catalog_lookups_total{
     namespace="agentgateway-system",
     gateway="agentgateway-system/agentgateway-proxy",
-    experiment_id="RUN_ID"
+    evaluation_id="RUN_ID"
   }
 )
 
@@ -16,7 +16,7 @@ sum by (eval_lane, gen_ai_request_model, gen_ai_response_model, gen_ai_token_typ
   agentgateway_gen_ai_client_token_usage_sum{
     namespace="agentgateway-system",
     gateway="agentgateway-system/agentgateway-proxy",
-    experiment_id="RUN_ID"
+    evaluation_id="RUN_ID"
   }
 )
 
@@ -25,6 +25,6 @@ sum by (eval_lane, gen_ai_request_model, gen_ai_response_model) (
   agentgateway_gen_ai_client_cost_usd_total{
     namespace="agentgateway-system",
     gateway="agentgateway-system/agentgateway-proxy",
-    experiment_id="RUN_ID"
+    evaluation_id="RUN_ID"
   }
 )

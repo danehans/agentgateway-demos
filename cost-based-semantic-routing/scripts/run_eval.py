@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the semantic-routing corpus through routed and forced-model lanes."""
+"""Run the semantic-routing dataset through routed and forced-model lanes."""
 
 import argparse
 import json
@@ -14,7 +14,7 @@ from pathlib import Path
 SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
-from corpus import load_corpus
+from dataset import load_dataset
 
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
@@ -39,7 +39,7 @@ def parse_args():
     )
     parser.add_argument("--gateway-url", default="")
     parser.add_argument("--path", default="/v1/chat/completions")
-    parser.add_argument("--dataset", default=ROOT_DIR / "data" / "demo-corpus.jsonl", type=Path)
+    parser.add_argument("--dataset", default=ROOT_DIR / "data" / "demo-dataset.jsonl", type=Path)
     parser.add_argument("--catalog", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--run-id", default=datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ"))
@@ -127,7 +127,7 @@ def request_headers(run_id, item, lane):
     headers = {
         "Content-Type": "application/json",
         "X-Request-ID": f"vsr-{run_id}-{lane}-{item['id']}",
-        "X-Experiment-ID": run_id,
+        "X-Evaluation-ID": run_id,
         "X-Eval-ID": item["id"],
         "X-Eval-Lane": lane,
         "X-User-ID": f"vsr-{run_id}-{lane}",
@@ -166,7 +166,7 @@ def usage(body):
 def request_messages(args, item):
     messages = item.get("messages")
     if not isinstance(messages, list) or not messages:
-        raise ValueError(f"{item['id']}: corpus item has no messages")
+        raise ValueError(f"{item['id']}: dataset item has no messages")
     for message in messages:
         if (
             not isinstance(message, dict)
@@ -174,7 +174,7 @@ def request_messages(args, item):
             or not isinstance(message.get("content"), str)
             or not message["content"].strip()
         ):
-            raise ValueError(f"{item['id']}: corpus contains an invalid message")
+            raise ValueError(f"{item['id']}: dataset contains an invalid message")
     return [{"role": "system", "content": args.system_prompt}, *messages]
 
 
@@ -237,10 +237,10 @@ def main():
     args = parse_args()
     catalog = load_catalog(args.catalog)
     try:
-        corpus_items = load_corpus(args.dataset)
+        dataset_items = load_dataset(args.dataset)
         if args.limit < 0:
             raise ValueError("--limit must not be negative")
-        items = corpus_items[:args.limit] if args.limit else corpus_items
+        items = dataset_items[:args.limit] if args.limit else dataset_items
         selection = "first_n" if args.limit else "all"
     except ValueError as error:
         raise SystemExit(str(error)) from error

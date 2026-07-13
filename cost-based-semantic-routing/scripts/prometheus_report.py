@@ -43,17 +43,17 @@ def load_catalog(path):
         return json.load(stream)
 
 
-def load_result_metadata(path, experiment_id):
+def load_result_metadata(path, evaluation_id):
     rows = []
     with open(path, encoding="utf-8") as stream:
         rows = [json.loads(line) for line in stream if line.strip()]
     if not rows:
         raise RuntimeError(f"result file is empty: {path}")
     run_ids = {row.get("run_id") for row in rows}
-    if run_ids != {experiment_id}:
+    if run_ids != {evaluation_id}:
         raise RuntimeError(
             f"result run IDs {sorted(str(value) for value in run_ids)} "
-            f"do not match experiment {experiment_id}"
+            f"do not match evaluation {evaluation_id}"
         )
     requests = []
     for row in rows:
@@ -151,13 +151,13 @@ def calculate_costs(rows, catalog):
     return lane_costs, by_model
 
 
-def build_report(base_url, experiment_id, catalog_path, results_path):
-    result_metadata = load_result_metadata(results_path, experiment_id)
+def build_report(base_url, evaluation_id, catalog_path, results_path):
+    result_metadata = load_result_metadata(results_path, evaluation_id)
     expected_requests = result_metadata["expected_requests"]
     selector = (
         'namespace="agentgateway-system",'
         'gateway="agentgateway-system/agentgateway-proxy",'
-        f"experiment_id={prom_string(experiment_id)}"
+        f"evaluation_id={prom_string(evaluation_id)}"
     )
     lookup_labels = [
         "eval_lane",
@@ -178,14 +178,14 @@ def build_report(base_url, experiment_id, catalog_path, results_path):
     lookups = normalize_vector(lookup_rows, lookup_labels, "lookups")
     non_exact = [row for row in lookups if row.get("status", "").lower() != "exact"]
     if not lookups:
-        raise RuntimeError(f"no model catalog lookups found for {experiment_id}")
+        raise RuntimeError(f"no model catalog lookups found for {evaluation_id}")
     if non_exact:
         raise RuntimeError(f"non-exact model catalog lookups found: {non_exact}")
     observed_lookups = sum(row["lookups"] for row in lookups)
     if observed_lookups < expected_requests:
         raise RuntimeError(
             f"only {observed_lookups:g} of {expected_requests} catalog lookups are available "
-            f"for {experiment_id}"
+            f"for {evaluation_id}"
         )
 
     lane_costs, model_costs = calculate_costs(token_rows, load_catalog(catalog_path))
@@ -195,13 +195,13 @@ def build_report(base_url, experiment_id, catalog_path, results_path):
         missing = sorted(expected_lanes - observed_lanes)
         raise RuntimeError("cost metrics are missing evaluation lanes: " + ", ".join(missing))
     if sum(row["cost_usd"] for row in lane_costs) <= 0:
-        raise RuntimeError(f"catalog-priced token cost is zero for {experiment_id}")
+        raise RuntimeError(f"catalog-priced token cost is zero for {evaluation_id}")
 
     return {
-        "scope": "experiment",
-        "experiment_id": experiment_id,
-        "experiment_started_at": result_metadata["started_at"],
-        "experiment_ended_at": result_metadata["ended_at"],
+        "scope": "evaluation",
+        "evaluation_id": evaluation_id,
+        "evaluation_started_at": result_metadata["started_at"],
+        "evaluation_ended_at": result_metadata["ended_at"],
         "expected_requests": expected_requests,
         "expected_lanes": sorted(expected_lanes),
         "observed_catalog_lookups": observed_lookups,
@@ -244,10 +244,10 @@ def render_report(report):
     lane_cost = report["catalog_backed_realized_cost_by_lane"]
     lines = [
         f"Scope: {report['scope']}",
-        f"Experiment: {report['experiment_id']}",
+        f"Evaluation: {report['evaluation_id']}",
         f"Requests observed: {report['observed_catalog_lookups']:g}/{report['expected_requests']}",
-        f"Started: {report['experiment_started_at']}",
-        f"Ended: {report['experiment_ended_at']}",
+        f"Started: {report['evaluation_started_at']}",
+        f"Ended: {report['evaluation_ended_at']}",
         f"Cost source: {report['cost_source']}",
     ]
     lines.extend(render_vector(
@@ -281,7 +281,7 @@ def write_json(path, report):
 def main():
     parser = argparse.ArgumentParser(description="Query agentgateway eval metrics from Prometheus.")
     parser.add_argument("--url", default="http://127.0.0.1:19090")
-    parser.add_argument("--experiment-id", required=True)
+    parser.add_argument("--evaluation-id", required=True)
     parser.add_argument("--catalog", required=True)
     parser.add_argument("--results", required=True)
     parser.add_argument("--json-output", default="", help="Write the report as JSON.")
@@ -289,7 +289,7 @@ def main():
 
     report = build_report(
         args.url,
-        args.experiment_id,
+        args.evaluation_id,
         args.catalog,
         args.results,
     )

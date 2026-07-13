@@ -7,7 +7,7 @@ and Rust coding tasks to `gpt-5.4-nano` and sends more complex correctness,
 distributed-systems, and deep-debugging tasks to `gpt-5.5`.
 
 Agentgateway records the selected model, token use, catalog-priced cost,
-latency, logs, and traces. The result is a small, shareable experiment that
+latency, logs, and traces. The result is a small, shareable evaluation that
 answers four questions:
 
 1. Did semantic routing cost less than always using `gpt-5.5`?
@@ -68,7 +68,7 @@ become healthy. `setup` makes no OpenAI requests. `all` sends 54 small billable
 requests by default: two routing probes, four smoke-test requests, and 48
 primary requests.
 
-The corpus has 24 concise Go and Rust developer prompts: 12 routine
+The dataset has 24 concise Go and Rust developer prompts: 12 routine
 implementation or test tasks and 12 complex correctness or distributed-systems
 tasks. The runner holds request settings constant across both lanes, including
 `reasoning_effort: none`. Routine prompts have a 256-token cap and complex
@@ -81,7 +81,7 @@ Each run writes these files under `results/`:
 - `<RUN_ID>.jsonl`: request-level selected model, tokens, catalog-derived local
   cost estimate, latency, and vSR decision headers
 - `<RUN_ID>-metadata.json`: component versions and fetched example revision
-- `<RUN_ID>-summary.json` and `.txt`: local and experiment-scoped Prometheus
+- `<RUN_ID>-summary.json` and `.txt`: local and evaluation-scoped Prometheus
   data
 - `<RUN_ID>-chart.svg`: spend, routing agreement, model mix, complex-prompt
   escalation, and latency
@@ -93,10 +93,10 @@ The chart uses two lanes only:
 | `routed` | vSR selects `gpt-5.4-nano` or `gpt-5.5`. |
 | `always_expensive` | Every request uses `gpt-5.5`; the cost baseline. |
 
-The result chart shows the routed model mix and the fraction of corpus prompts
+The result chart shows the routed model mix and the fraction of dataset prompts
 labelled complex that vSR escalated to `gpt-5.5`. Together, those values make it
 obvious whether the savings came from a real tiered policy rather than routing
-everything to nano. It also shows corpus-label agreement as a simple policy
+everything to nano. It also shows dataset-label agreement as a simple policy
 sanity check. This is not an answer-quality benchmark; it demonstrates that the
 policy preserves an expensive tier for work the sample identifies as complex.
 
@@ -129,7 +129,7 @@ Adjust the routing signals, redeploy them, and run the same sample again:
 The chart and summary make the trade-off visible. Increasing escalation to
 `gpt-5.5` will generally improve the policy's complex-prompt coverage and raise
 spend; lowering it does the opposite. The goal is a reasonable balance, not
-100% agreement with a small checked-in corpus.
+100% agreement with a small checked-in dataset.
 
 The vSR chart and ExtProc image are pinned to `0.3.0` and `v0.3.0` for a
 consistent run. Override both together when validating a newer release:

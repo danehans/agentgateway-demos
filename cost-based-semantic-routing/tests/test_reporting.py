@@ -27,12 +27,12 @@ prometheus_report = load_module(
 verify_observability = load_module(
     "verify_observability", DEMO_DIR / "scripts" / "verify_observability.py"
 )
-render_experiment_chart = load_module(
-    "render_experiment_chart",
-    DEMO_DIR / "scripts" / "render_experiment_chart.py",
+render_evaluation_chart = load_module(
+    "render_evaluation_chart",
+    DEMO_DIR / "scripts" / "render_evaluation_chart.py",
 )
 run_eval = load_module("run_eval", DEMO_DIR / "scripts" / "run_eval.py")
-corpus = load_module("corpus", DEMO_DIR / "scripts" / "corpus.py")
+dataset = load_module("dataset", DEMO_DIR / "scripts" / "dataset.py")
 summarize_results = load_module(
     "summarize_results", DEMO_DIR / "scripts" / "summarize_results.py"
 )
@@ -108,14 +108,14 @@ class PrometheusReportTest(unittest.TestCase):
                 "http://prometheus", "test-run", catalog_path, results_path
             )
 
-        self.assertEqual(report["scope"], "experiment")
-        self.assertEqual(report["experiment_id"], "test-run")
+        self.assertEqual(report["scope"], "evaluation")
+        self.assertEqual(report["evaluation_id"], "test-run")
         self.assertEqual(report["expected_requests"], 2)
         self.assertEqual(report["observed_catalog_lookups"], 3)
         self.assertEqual(
-            report["experiment_started_at"], "2026-07-10T19:20:00+00:00"
+            report["evaluation_started_at"], "2026-07-10T19:20:00+00:00"
         )
-        self.assertEqual(report["experiment_ended_at"], "2026-07-10T19:20:02+00:00")
+        self.assertEqual(report["evaluation_ended_at"], "2026-07-10T19:20:02+00:00")
         self.assertNotIn("window", report)
         expensive = next(
             row
@@ -175,7 +175,7 @@ class PrometheusReportTest(unittest.TestCase):
                     "http://prometheus", "test-run", catalog_path, results_path
                 )
 
-    def test_rejects_result_rows_from_another_experiment(self):
+    def test_rejects_result_rows_from_another_evaluation(self):
         with tempfile.TemporaryDirectory() as directory:
             results_path = Path(directory) / "results.jsonl"
             results_path.write_text(json.dumps({
@@ -183,7 +183,7 @@ class PrometheusReportTest(unittest.TestCase):
                 "timestamp": "2026-07-10T19:20:01+00:00",
                 "latency_ms": 500,
             }) + "\n", encoding="utf-8")
-            with self.assertRaisesRegex(RuntimeError, "do not match experiment"):
+            with self.assertRaisesRegex(RuntimeError, "do not match evaluation"):
                 prometheus_report.load_result_metadata(results_path, "test-run")
 
 
@@ -200,7 +200,7 @@ class AssembleSummaryTest(unittest.TestCase):
             local_json.write_text(json.dumps({"routing": {"accuracy": 0.9}}), encoding="utf-8")
             local_text.write_text("Routing accuracy: 90.0%\n", encoding="utf-8")
             prometheus_json.write_text(
-                json.dumps({"scope": "experiment"}), encoding="utf-8"
+                json.dumps({"scope": "evaluation"}), encoding="utf-8"
             )
             prometheus_text.write_text("Catalog cost: 0.12500000\n", encoding="utf-8")
             args = SimpleNamespace(
@@ -221,12 +221,12 @@ class AssembleSummaryTest(unittest.TestCase):
             self.assertEqual(summary["run_id"], "test-run")
             self.assertEqual(summary["prometheus"]["status"], "collected")
             self.assertIn(
-                "Catalog-backed Prometheus summary (experiment-scoped)", rendered
+                "Catalog-backed Prometheus summary (evaluation-scoped)", rendered
             )
             self.assertIn("Routing accuracy: 90.0%", rendered)
 
 
-class RenderExperimentChartTest(unittest.TestCase):
+class RenderEvaluationChartTest(unittest.TestCase):
     def test_uses_catalog_priced_costs_and_renders_key_metrics(self):
         summary = {
             "run_id": "test-run",
@@ -269,8 +269,8 @@ class RenderExperimentChartTest(unittest.TestCase):
             },
         }
 
-        costs, source = render_experiment_chart.cost_data(summary)
-        chart = render_experiment_chart.render_chart(summary)
+        costs, source = render_evaluation_chart.cost_data(summary)
+        chart = render_evaluation_chart.render_chart(summary)
 
         self.assertEqual(source, "Catalog-priced agentgateway metrics")
         self.assertAlmostEqual(costs["routed"], 0.60)
@@ -298,12 +298,12 @@ class RenderExperimentChartTest(unittest.TestCase):
             "prometheus": {"status": "disabled"},
         }
 
-        costs, source = render_experiment_chart.cost_data(summary)
+        costs, source = render_evaluation_chart.cost_data(summary)
 
         self.assertEqual(source, "Local token-cost estimate")
         self.assertAlmostEqual(costs["routed"], 0.50)
         self.assertEqual(
-            render_experiment_chart.chart_output_path(Path("run-summary.json")),
+            render_evaluation_chart.chart_output_path(Path("run-summary.json")),
             Path("run-chart.svg"),
         )
 
@@ -334,9 +334,9 @@ class EvaluationToolingTest(unittest.TestCase):
             "gpt-cheap",
         )
 
-    def test_default_corpus_has_expected_model_mix(self):
-        dataset = DEMO_DIR / "data" / "demo-corpus.jsonl"
-        rows = corpus.load_corpus(dataset)
+    def test_default_dataset_has_expected_model_mix(self):
+        dataset_path = DEMO_DIR / "data" / "demo-dataset.jsonl"
+        rows = dataset.load_dataset(dataset_path)
 
         self.assertEqual(len({row["id"] for row in rows}), len(rows))
         self.assertEqual(len(rows), 24)
@@ -357,7 +357,7 @@ class EvaluationToolingTest(unittest.TestCase):
             self.assertEqual(row["messages"][-1]["role"], "user")
             self.assertEqual(len(row["messages"]), 1)
 
-    def test_evaluator_preserves_corpus_history(self):
+    def test_evaluator_preserves_dataset_history(self):
         item = {
             "id": "conversation-turn-2",
             "messages": [
@@ -410,7 +410,7 @@ class VerifyObservabilityTest(unittest.TestCase):
     def test_finds_correlated_signal_values(self):
         payload = {
             "resource": {"service.name": "agentgateway-proxy"},
-            "attributes": {"experiment.id": "test-run"},
+            "attributes": {"evaluation.id": "test-run"},
         }
 
         self.assertTrue(
@@ -420,15 +420,15 @@ class VerifyObservabilityTest(unittest.TestCase):
         )
         self.assertFalse(verify_observability.json_contains(payload, ["missing-run"]))
 
-    def test_verifies_every_corpus_model(self):
+    def test_verifies_every_dataset_model(self):
         original_get_json = verify_observability.get_json
         verify_observability.get_json = lambda *_args, **_kwargs: {
             "data": [{"id": "gpt-cheap"}, {"id": "gpt-expensive"}]
         }
         self.addCleanup(setattr, verify_observability, "get_json", original_get_json)
         with tempfile.TemporaryDirectory() as directory:
-            corpus = Path(directory) / "corpus.jsonl"
-            corpus.write_text(
+            dataset = Path(directory) / "dataset.jsonl"
+            dataset.write_text(
                 json.dumps({
                     "id": "test-conversation",
                     "language": "go",
@@ -453,7 +453,7 @@ class VerifyObservabilityTest(unittest.TestCase):
 
             with redirect_stdout(io.StringIO()):
                 verify_observability.verify_models(
-                    SimpleNamespace(url="http://router", corpus=str(corpus))
+                    SimpleNamespace(url="http://router", dataset=str(dataset))
                 )
 
 

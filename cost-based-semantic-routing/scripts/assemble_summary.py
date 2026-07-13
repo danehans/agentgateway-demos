@@ -39,9 +39,9 @@ def build_summary(args):
 
 def render_summary(summary, local_text, prometheus_text):
     prometheus = summary["prometheus"]
-    prometheus_heading = "Catalog-backed Prometheus summary (experiment-scoped)"
+    prometheus_heading = "Catalog-backed Prometheus summary (evaluation-scoped)"
     lines = [
-        "Semantic routing experiment summary",
+        "Semantic routing evaluation summary",
         f"run_id={summary['run_id']}",
         f"result_file={summary['result_file']}",
         f"generated_at={summary['generated_at']}",

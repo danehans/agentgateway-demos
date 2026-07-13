@@ -24,7 +24,7 @@ if [[ -z "${OBSERVABILITY_PROFILE:-}" && -f "${WORK_DIR}/observability-profile" 
   OBSERVABILITY_PROFILE="$(cat "${WORK_DIR}/observability-profile")"
 fi
 OBSERVABILITY_PROFILE="${OBSERVABILITY_PROFILE:-full}"
-EVAL_DATASET="${EVAL_DATASET:-${ROOT_DIR}/data/demo-corpus.jsonl}"
+EVAL_DATASET="${EVAL_DATASET:-${ROOT_DIR}/data/demo-dataset.jsonl}"
 EVAL_LIMIT="${EVAL_LIMIT:-0}"
 EVAL_LANES="routed,always_expensive"
 EVAL_REASONING_EFFORT="${EVAL_REASONING_EFFORT:-none}"
@@ -202,7 +202,7 @@ verify_tcp_service() {
 generate_prometheus_report() {
   python3 "${ROOT_DIR}/scripts/prometheus_report.py" \
     --url "$1" \
-    --experiment-id "$2" \
+    --evaluation-id "$2" \
     --catalog "$3" \
     --results "$4" \
     --json-output "$5" \
@@ -219,7 +219,7 @@ summary_chart_path() {
 }
 
 render_summary_chart() {
-  python3 "${ROOT_DIR}/scripts/render_experiment_chart.py" \
+  python3 "${ROOT_DIR}/scripts/render_evaluation_chart.py" \
     "$1" --output "$2"
 }
 
@@ -257,10 +257,10 @@ Commands:
   all        Set up the stack, verify buffered ExtProc, and run the evaluation
   setup      Create the cluster and install agentgateway, observability, and vSR
   verify     Run small model-backed buffered ExtProc routing checks
-  eval       Run a paid smoke test, the two-lane corpus, and a result summary
+  eval       Run a paid smoke test, the two-lane dataset, and a result summary
   report     Regenerate the latest text and JSON result summaries
   chart      Render an SVG chart from the latest or SUMMARY_FILE summary JSON
-  router     Redeploy vSR and experiment resources after tuning the fetched config
+  router     Redeploy vSR and evaluation resources after tuning the fetched config
   refresh    Replace the fetched agentgateway checkout with EXAMPLE_REF
   status     Show the deployed resources and resolved example revision
   dashboard  Port-forward Grafana to http://localhost:3000
@@ -271,9 +271,9 @@ Important environment variables:
   OPENAI_API_KEY          Required by setup and all; not written to local files
   HF_TOKEN                Optional; raises Hugging Face download rate limits
   OBSERVABILITY_PROFILE   full (default), metrics, or none
-  EVAL_DATASET            JSONL corpus to evaluate; defaults to the checked-in
+  EVAL_DATASET            JSONL dataset to evaluate; defaults to the checked-in
                           developer-prompt sample.
-  EVAL_LIMIT              Prompts to run from the start of the corpus; defaults
+  EVAL_LIMIT              Prompts to run from the start of the dataset; defaults
                           to every prompt.
   EVAL_REASONING_EFFORT   OpenAI reasoning effort for both lanes; defaults to
                           none to keep demo responses bounded.
@@ -433,7 +433,7 @@ with open(sys.argv[1], encoding="utf-8") as stream:
     catalog = json.load(stream)
 from pathlib import Path
 sys.path.insert(0, str(Path(sys.argv[2]).parent.parent / "scripts"))
-from corpus import expected_models
+from dataset import expected_models
 expected = set(expected_models(sys.argv[2]))
 models = catalog.get("providers", {}).get("openai", {}).get("models", {})
 missing = sorted(model for model in expected if model and not models.get(model, {}).get("rates"))
@@ -554,7 +554,7 @@ verify_router_services() {
   retry_until "vSR configured model registration" \
     "${VERIFY_TIMEOUT_SEC}" "${VERIFY_INTERVAL_SEC}" \
     python3 "${ROOT_DIR}/scripts/verify_observability.py" models \
-      --url "${url}" --corpus "${EVAL_DATASET}"
+      --url "${url}" --dataset "${EVAL_DATASET}"
   stop_port_forward "${pid}"
 
   verify_tcp_service "${NAMESPACE}" semantic-router 50051 "vSR ExtProc gRPC"
@@ -578,14 +578,14 @@ verify_agentgateway_metrics_pipeline() {
 }
 
 verify_logs_and_traces() {
-  local experiment_id="$1" pid url expected
+  local evaluation_id="$1" pid url expected
   local loki_args=(
     --contains agentgateway-proxy
-    --contains "${experiment_id}"
+    --contains "${evaluation_id}"
   )
   local tempo_args=(
     --contains agentgateway-proxy
-    --contains "${experiment_id}"
+    --contains "${evaluation_id}"
   )
   shift
   [[ "${OBSERVABILITY_PROFILE}" == "full" ]] || return
@@ -598,7 +598,7 @@ verify_logs_and_traces() {
   start_port_forward "${TELEMETRY_NAMESPACE}" service/loki 3100 loki-signals
   pid="${PORT_FORWARD_PID}"
   url="http://127.0.0.1:${PORT_FORWARD_PORT}"
-  retry_until "agentgateway access log in Loki for ${experiment_id}" \
+  retry_until "agentgateway access log in Loki for ${evaluation_id}" \
     "${SIGNAL_TIMEOUT_SEC}" "${VERIFY_INTERVAL_SEC}" \
     python3 "${ROOT_DIR}/scripts/verify_observability.py" loki \
       --url "${url}" \
@@ -608,7 +608,7 @@ verify_logs_and_traces() {
   start_port_forward "${TELEMETRY_NAMESPACE}" service/tempo 3100 tempo-signals
   pid="${PORT_FORWARD_PID}"
   url="http://127.0.0.1:${PORT_FORWARD_PORT}"
-  retry_until "agentgateway trace in Tempo for ${experiment_id}" \
+  retry_until "agentgateway trace in Tempo for ${evaluation_id}" \
     "${SIGNAL_TIMEOUT_SEC}" "${VERIFY_INTERVAL_SEC}" \
     python3 "${ROOT_DIR}/scripts/verify_observability.py" tempo \
       --url "${url}" \
@@ -617,9 +617,9 @@ verify_logs_and_traces() {
 }
 
 verify_request_observability() {
-  local experiment_id="$1" pid url selector
+  local evaluation_id="$1" pid url selector
   [[ "${OBSERVABILITY_PROFILE}" != "none" ]] || return
-  selector="namespace=\"${NAMESPACE}\",gateway=\"${NAMESPACE}/agentgateway-proxy\",experiment_id=\"${experiment_id}\""
+  selector="namespace=\"${NAMESPACE}\",gateway=\"${NAMESPACE}/agentgateway-proxy\",evaluation_id=\"${evaluation_id}\""
   start_port_forward "${TELEMETRY_NAMESPACE}" \
     service/kube-prometheus-stack-prometheus 9090 prometheus-request-signals
   pid="${PORT_FORWARD_PID}"
@@ -637,16 +637,16 @@ verify_request_observability() {
       --query "sum(agentgateway_request_duration_seconds_count{${selector}})" \
       --min-value 1
   stop_port_forward "${pid}"
-  verify_logs_and_traces "${experiment_id}"
+  verify_logs_and_traces "${evaluation_id}"
 }
 
 verify_llm_observability() {
-  local experiment_id="$1" result_file="$2" pid url selector lane_regex lane_count
+  local evaluation_id="$1" result_file="$2" pid url selector lane_regex lane_count
   local smoke_json smoke_text
   [[ "${OBSERVABILITY_PROFILE}" != "none" ]] || return
-  selector="namespace=\"${NAMESPACE}\",gateway=\"${NAMESPACE}/agentgateway-proxy\",experiment_id=\"${experiment_id}\""
-  smoke_json="${WORK_DIR}/${experiment_id}-prometheus-summary.json"
-  smoke_text="${WORK_DIR}/${experiment_id}-prometheus-summary.txt"
+  selector="namespace=\"${NAMESPACE}\",gateway=\"${NAMESPACE}/agentgateway-proxy\",evaluation_id=\"${evaluation_id}\""
+  smoke_json="${WORK_DIR}/${evaluation_id}-prometheus-summary.json"
+  smoke_text="${WORK_DIR}/${evaluation_id}-prometheus-summary.txt"
   start_port_forward "${TELEMETRY_NAMESPACE}" \
     service/kube-prometheus-stack-prometheus 9090 prometheus-llm-signals
   pid="${PORT_FORWARD_PID}"
@@ -654,7 +654,7 @@ verify_llm_observability() {
   retry_until "nonzero catalog-priced cost from agentgateway token metrics" \
     "${SIGNAL_TIMEOUT_SEC}" "${VERIFY_INTERVAL_SEC}" \
     generate_prometheus_report \
-      "${url}" "${experiment_id}" "${WORK_DIR}/catalog.json" \
+      "${url}" "${evaluation_id}" "${WORK_DIR}/catalog.json" \
       "${result_file}" \
       "${smoke_json}" "${smoke_text}"
   retry_until "exact agentgateway model catalog lookups" \
@@ -684,7 +684,7 @@ verify_llm_observability() {
       --query "count(count by (eval_lane) (agentgateway_cost_catalog_lookups_total{${selector},status=~\"Exact|exact\",eval_lane=~\"${lane_regex}\"}))" \
       --min-value "${lane_count}"
   stop_port_forward "${pid}"
-  verify_logs_and_traces "${experiment_id}" "agw.ai.usage.cost.total"
+  verify_logs_and_traces "${evaluation_id}" "agw.ai.usage.cost.total"
 }
 
 gateway_http_reachable() {
@@ -1137,7 +1137,7 @@ cmd_setup() {
 }
 
 verify_routing_probe() {
-  local url="$1" experiment_id="$2" label="$3" expected_model="$4"
+  local url="$1" evaluation_id="$2" label="$3" expected_model="$4"
   local expected_decision="$5" prompt="$6" headers body payload status
   headers="${WORK_DIR}/${label}-routing.headers"
   body="${WORK_DIR}/${label}-routing.json"
@@ -1157,8 +1157,8 @@ PY
     "${url}/v1/chat/completions" \
     -H 'Content-Type: application/json' \
     -H 'X-VSR-Debug: true' \
-    -H "X-Request-ID: ${experiment_id}-${label}" \
-    -H "X-Experiment-ID: ${experiment_id}" \
+    -H "X-Request-ID: ${evaluation_id}-${label}" \
+    -H "X-Evaluation-ID: ${evaluation_id}" \
     -H "X-Eval-ID: ${label}-routing" \
     -H 'X-Eval-Lane: routed' \
     -d "${payload}")"
@@ -1179,18 +1179,18 @@ cmd_verify() {
   preflight
   use_cluster
   fetch_example
-  local url experiment_id
+  local url evaluation_id
   verify_deployed_stack
   url="$(gateway_url)"
-  experiment_id="semantic-routing-demo-verify-$(date -u +%Y%m%dT%H%M%SZ)-$$"
+  evaluation_id="semantic-routing-demo-verify-$(date -u +%Y%m%dT%H%M%SZ)-$$"
 
   log "Verifying buffered ExtProc model selection with two small OpenAI requests"
-  verify_routing_probe "${url}" "${experiment_id}" routine gpt-5.4-nano \
+  verify_routing_probe "${url}" "${evaluation_id}" routine gpt-5.4-nano \
     route_to_low_cost 'Implement a small Go helper and one table-driven test.'
-  verify_routing_probe "${url}" "${experiment_id}" advanced gpt-5.5 \
+  verify_routing_probe "${url}" "${evaluation_id}" advanced gpt-5.5 \
     route_to_expensive 'Design a distributed rate limiter that remains correct during Redis failover and regional network partitions.'
   printf 'Buffered ExtProc routing checks passed for both model tiers.\n'
-  verify_request_observability "${experiment_id}"
+  verify_request_observability "${evaluation_id}"
 }
 
 write_metadata() {
@@ -1281,13 +1281,13 @@ cmd_eval() {
 cmd_report() {
   preflight
   use_cluster
-  local result_file result_base summary_json summary_text summary_chart experiment_id
+  local result_file result_base summary_json summary_text summary_chart evaluation_id
   local local_json local_text prometheus_json prometheus_text
   local port_forward_pid prometheus_status prometheus_reason prometheus_url
   local summary_args=()
   result_file="$(resolve_result_file)"
   [[ -f "${result_file}" ]] || die "result file does not exist: ${result_file}"
-  experiment_id="$(python3 -c '
+  evaluation_id="$(python3 -c '
 import json
 import sys
 
@@ -1297,7 +1297,7 @@ with open(sys.argv[1], encoding="utf-8") as stream:
             print(json.loads(line)["run_id"])
             break
 ' "${result_file}")"
-  [[ -n "${experiment_id}" ]] || die "result file does not contain a run_id: ${result_file}"
+  [[ -n "${evaluation_id}" ]] || die "result file does not contain a run_id: ${result_file}"
   result_base="${result_file%.jsonl}"
   summary_json="${result_base}-summary.json"
   summary_text="${result_base}-summary.txt"
@@ -1323,7 +1323,7 @@ with open(sys.argv[1], encoding="utf-8") as stream:
     retry_until "catalog-backed Prometheus report" \
       "${SIGNAL_TIMEOUT_SEC}" "${VERIFY_INTERVAL_SEC}" \
       generate_prometheus_report \
-        "${prometheus_url}" "${experiment_id}" \
+        "${prometheus_url}" "${evaluation_id}" \
         "${WORK_DIR}/catalog.json" "${result_file}" \
         "${prometheus_json}" "${prometheus_text}"
     prometheus_status=collected
@@ -1350,7 +1350,7 @@ with open(sys.argv[1], encoding="utf-8") as stream:
   summary_chart="$(summary_chart_path "${summary_json}")"
   render_summary_chart "${summary_json}" "${summary_chart}"
 
-  log "Experiment summary"
+  log "Evaluation summary"
   cat "${summary_text}"
   printf 'JSON summary: %s\n' "${summary_json}"
   printf 'Text summary: %s\n' "${summary_text}"

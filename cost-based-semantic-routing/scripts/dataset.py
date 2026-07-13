@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Load and validate the multi-turn semantic-routing evaluation corpus."""
+"""Load and validate the multi-turn semantic-routing evaluation dataset."""
 
 import json
 from pathlib import Path
@@ -70,14 +70,14 @@ def _conversation_items(conversation, path, line_number):
 
 
 def _legacy_item(row, path, line_number):
-    """Keep the loader usable with a single-turn JSONL corpus."""
+    """Keep the loader usable with a single-turn JSONL dataset."""
     prompt = _text(row.get("prompt"), path, line_number, "prompt")
     _text(row.get("id"), path, line_number, "id")
     _text(row.get("expected_model"), path, line_number, "expected_model")
     return {**row, "messages": [{"role": "user", "content": prompt}]}
 
 
-def load_corpus(path, limit=0):
+def load_dataset(path, limit=0):
     path = Path(path)
     items = []
     conversation_ids = set()
@@ -103,7 +103,7 @@ def load_corpus(path, limit=0):
             if limit and len(items) >= limit:
                 return items[:limit]
     if not items:
-        raise ValueError(f"{path}: corpus is empty")
+        raise ValueError(f"{path}: dataset is empty")
     ids = [item["id"] for item in items]
     if len(ids) != len(set(ids)):
         raise ValueError(f"{path}: duplicate evaluation item id")
@@ -111,4 +111,4 @@ def load_corpus(path, limit=0):
 
 
 def expected_models(path):
-    return sorted({item["expected_model"] for item in load_corpus(path)})
+    return sorted({item["expected_model"] for item in load_dataset(path)})

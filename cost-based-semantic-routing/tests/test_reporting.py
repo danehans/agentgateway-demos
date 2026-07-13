@@ -321,7 +321,7 @@ class EvaluationToolingTest(unittest.TestCase):
             "gpt-cheap",
         )
 
-    def test_default_corpus_is_balanced(self):
+    def test_default_corpus_has_expected_model_mix(self):
         dataset = DEMO_DIR / "data" / "eval-corpus.jsonl"
         conversations = [
             json.loads(line)
@@ -334,10 +334,10 @@ class EvaluationToolingTest(unittest.TestCase):
         self.assertEqual(len({row["id"] for row in rows}), len(rows))
         self.assertEqual(len(rows), 200)
         self.assertEqual(
-            sum(row["expected_model"] == "gpt-5.4-nano" for row in rows), 100
+            sum(row["expected_model"] == "gpt-5.4-nano" for row in rows), 90
         )
         self.assertEqual(
-            sum(row["expected_model"] == "gpt-5.5" for row in rows), 100
+            sum(row["expected_model"] == "gpt-5.5" for row in rows), 110
         )
         self.assertEqual(
             {row["language"] for row in rows}, {"go", "rust"}

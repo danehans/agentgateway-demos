@@ -69,11 +69,12 @@ namespaces. The script intentionally ignores generic `NAMESPACE` and
 `TELEMETRY_NAMESPACE` variables inherited from another Kubernetes workflow.
 
 The default evaluation replays 50 four-turn Go and Rust developer conversations:
-200 routing decisions in a balanced corpus. Each turn includes its canonical
-prior user and assistant context, so later requests exercise a realistic growing
-transcript. It first runs a two-turn smoke test and stops if either model is
-unavailable, preventing a full run of known failures. Each corpus turn is sent
-through the three lanes, for 600 billable model requests.
+200 routing decisions across routine, escalating, and advanced work. Each turn
+includes its canonical prior user and assistant context, so later requests
+exercise a realistic growing transcript. It first runs a two-turn smoke test
+and stops if either model is unavailable, preventing a full run of known
+failures. Each corpus turn is sent through the three lanes, for 600 billable
+model requests.
 
 ## What the script does
 

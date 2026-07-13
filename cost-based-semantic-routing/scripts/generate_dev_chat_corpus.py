@@ -9,6 +9,7 @@ from pathlib import Path
 ROOT_DIR = Path(__file__).resolve().parents[1]
 LOW_COST_MODEL = "gpt-5.4-nano"
 EXPENSIVE_MODEL = "gpt-5.5"
+EXPECTED_TURN_COUNTS = {LOW_COST_MODEL: 90, EXPENSIVE_MODEL: 110}
 
 
 ROUTINE_GO = [
@@ -137,11 +138,19 @@ def routine_turns(language, scenario, escalating=False):
             "assistant_context": f'''Keep the change local to the handler. Validate the input before calling the store, return a typed application error, and add a table-driven test for the success and invalid-input paths. Do not introduce a new abstraction for this single call site.''',
         },
         {
-            "family": f"routine_{language}_testing",
-            "expected_model": LOW_COST_MODEL,
-            "max_tokens": 240,
-            "user": f'''I applied the patch and the reviewer added one requirement: {complication}. The existing tests use an in-memory store. What is the smallest update to the {name} code and test that covers this without changing the handler signature?''',
-            "assistant_context": f'''Add one explicit branch for the new edge case and make the in-memory store record calls. The test should assert both the returned error or result and whether Save was called, keeping the behavior visible at the API boundary.''',
+            "family": high_family if escalating else f"routine_{language}_testing",
+            "expected_model": EXPENSIVE_MODEL if escalating else LOW_COST_MODEL,
+            "max_tokens": 360 if escalating else 240,
+            "user": (
+                f'''Production evidence changes the scope: {complication}. Before changing the {name} handler, determine whether a narrow patch remains safe. Explain the idempotency or concurrency risk, the durable state transition or invariant that matters, and the focused test that would prove the fix.'''
+                if escalating
+                else f'''I applied the patch and the reviewer added one requirement: {complication}. The existing tests use an in-memory store. What is the smallest update to the {name} code and test that covers this without changing the handler signature?'''
+            ),
+            "assistant_context": (
+                '''This is no longer only a local handler change. Identify the durable idempotency boundary, make the unsafe transition explicit, and test the retry or recovery window before choosing an implementation.'''
+                if escalating
+                else '''Add one explicit branch for the new edge case and make the in-memory store record calls. The test should assert both the returned error or result and whether Save was called, keeping the behavior visible at the API boundary.'''
+            ),
         },
     ]
     if escalating:
@@ -251,7 +260,7 @@ def main():
     conversations = build_conversations()
     turns = [turn for conversation_item in conversations for turn in conversation_item["turns"]]
     expected = {model: sum(turn["expected_model"] == model for turn in turns) for model in (LOW_COST_MODEL, EXPENSIVE_MODEL)}
-    if len(conversations) != 50 or len(turns) != 200 or expected != {LOW_COST_MODEL: 100, EXPENSIVE_MODEL: 100}:
+    if len(conversations) != 50 or len(turns) != 200 or expected != EXPECTED_TURN_COUNTS:
         raise SystemExit(f"invalid corpus shape: conversations={len(conversations)} turns={len(turns)} expected={expected}")
 
     args.output.parent.mkdir(parents=True, exist_ok=True)

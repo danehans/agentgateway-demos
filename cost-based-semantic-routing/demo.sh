@@ -24,14 +24,11 @@ if [[ -z "${OBSERVABILITY_PROFILE:-}" && -f "${WORK_DIR}/observability-profile" 
   OBSERVABILITY_PROFILE="$(cat "${WORK_DIR}/observability-profile")"
 fi
 OBSERVABILITY_PROFILE="${OBSERVABILITY_PROFILE:-full}"
-EVAL_DATASET="${EVAL_DATASET:-${ROOT_DIR}/data/tuning-corpus.jsonl}"
-EVAL_DATASET_ROLE="${EVAL_DATASET_ROLE:-tuning}"
+EVAL_DATASET="${EVAL_DATASET:-${ROOT_DIR}/data/demo-corpus.jsonl}"
 EVAL_LIMIT="${EVAL_LIMIT:-0}"
-EVAL_MANIFEST="${EVAL_MANIFEST:-}"
-if [[ "${EVAL_LIMIT}" == "50" && -z "${EVAL_MANIFEST}" && \
-  "${EVAL_DATASET}" == "${ROOT_DIR}/data/tuning-corpus.jsonl" ]]; then
-  EVAL_MANIFEST="${ROOT_DIR}/data/tuning-50-manifest.json"
-fi
+EVAL_LANES="routed,always_expensive"
+REVIEW_LIMIT="${REVIEW_LIMIT:-12}"
+EVAL_REASONING_EFFORT="${EVAL_REASONING_EFFORT:-none}"
 SMOKE_LIMIT="${SMOKE_LIMIT:-2}"
 EVAL_DELAY_SEC="${EVAL_DELAY_SEC:-1}"
 CAPTURE_OUTPUT="${CAPTURE_OUTPUT:-false}"
@@ -283,7 +280,7 @@ Commands:
   all        Set up the stack, verify buffered ExtProc, and run the evaluation
   setup      Create the cluster and install agentgateway, observability, and vSR
   verify     Run small model-backed buffered ExtProc routing checks
-  eval       Run a paid smoke test, the three-lane corpus, and a result summary
+  eval       Run a paid smoke test, the two-lane corpus, and a result summary
   report     Regenerate the latest text and JSON result summaries
   chart      Render an SVG chart from the latest or SUMMARY_FILE summary JSON
   review     Create a blinded answer-quality review package from a captured run
@@ -300,14 +297,13 @@ Important environment variables:
   HF_TOKEN                Optional; raises Hugging Face download rate limits
   OBSERVABILITY_PROFILE   full (default), metrics, or none
   EVAL_DATASET            JSONL corpus to evaluate; defaults to the checked-in
-                          tuning corpus. Use a separate, frozen holdout corpus
-                          for publication-quality outcome measurement.
-  EVAL_DATASET_ROLE       tuning (default) or holdout; recorded in run metadata.
-  EVAL_LIMIT              Corpus turns to run; defaults to every dataset turn.
-                          50 uses the checked-in fixed tuning manifest only when
-                          EVAL_DATASET is the default tuning corpus.
-  EVAL_MANIFEST           Optional JSON manifest of exact corpus IDs to run.
-                          It must contain EVAL_LIMIT IDs when a limit is set.
+                          developer-prompt sample.
+  EVAL_LIMIT              Prompts to run from the start of the corpus; defaults
+                          to every prompt.
+  REVIEW_LIMIT            Answers to include in the blinded A/B spot check;
+                          defaults to 12. Set 0 to include every prompt.
+  EVAL_REASONING_EFFORT   OpenAI reasoning effort for both lanes; defaults to
+                          none so bounded demo responses remain reviewable.
   CAPTURE_OUTPUT          true to save model responses for blinded quality review
   REVIEW_FILE             Completed blinded review CSV used by the score command
   SUMMARY_FILE             Summary JSON used by chart; defaults to the latest run
@@ -362,11 +358,7 @@ preflight() {
   esac
   [[ "${EVAL_LIMIT}" =~ ^[0-9]+$ ]] || die "EVAL_LIMIT must be an integer"
   [[ -f "${EVAL_DATASET}" ]] || die "EVAL_DATASET does not exist: ${EVAL_DATASET}"
-  case "${EVAL_DATASET_ROLE}" in
-    tuning|holdout) ;;
-    *) die "EVAL_DATASET_ROLE must be tuning or holdout" ;;
-  esac
-  [[ -z "${EVAL_MANIFEST}" || -f "${EVAL_MANIFEST}" ]] || die "EVAL_MANIFEST does not exist: ${EVAL_MANIFEST}"
+  [[ "${REVIEW_LIMIT}" =~ ^[0-9]+$ ]] || die "REVIEW_LIMIT must be an integer"
   [[ "${SMOKE_LIMIT}" =~ ^[0-9]+$ ]] || die "SMOKE_LIMIT must be an integer"
   [[ "${VERIFY_TIMEOUT_SEC}" =~ ^[1-9][0-9]*$ ]] || die "VERIFY_TIMEOUT_SEC must be positive"
   [[ "${VSR_READY_TIMEOUT_SEC}" =~ ^[1-9][0-9]*$ ]] || die "VSR_READY_TIMEOUT_SEC must be positive"
@@ -679,7 +671,7 @@ verify_request_observability() {
 }
 
 verify_llm_observability() {
-  local experiment_id="$1" result_file="$2" pid url selector
+  local experiment_id="$1" result_file="$2" pid url selector lane_regex lane_count
   local smoke_json smoke_text
   [[ "${OBSERVABILITY_PROFILE}" != "none" ]] || return
   selector="namespace=\"${NAMESPACE}\",gateway=\"${NAMESPACE}/agentgateway-proxy\",experiment_id=\"${experiment_id}\""
@@ -713,12 +705,14 @@ verify_llm_observability() {
       --url "${url}" \
       --query "sum(agentgateway_gen_ai_server_request_duration_count{${selector}})" \
       --min-value 1
-  retry_until "cost metrics for all three evaluation lanes" \
+  lane_regex="${EVAL_LANES//,/|}"
+  lane_count="$(tr ',' '\n' <<<"${EVAL_LANES}" | sed '/^$/d' | wc -l | tr -d ' ')"
+  retry_until "cost metrics for each evaluation lane" \
     "${SIGNAL_TIMEOUT_SEC}" "${VERIFY_INTERVAL_SEC}" \
     python3 "${ROOT_DIR}/scripts/verify_observability.py" prometheus \
       --url "${url}" \
-      --query "count(count by (eval_lane) (agentgateway_cost_catalog_lookups_total{${selector},status=~\"Exact|exact\",eval_lane=~\"routed|always_low_cost|always_expensive\"}))" \
-      --min-value 3
+      --query "count(count by (eval_lane) (agentgateway_cost_catalog_lookups_total{${selector},status=~\"Exact|exact\",eval_lane=~\"${lane_regex}\"}))" \
+      --min-value "${lane_count}"
   stop_port_forward "${pid}"
   verify_logs_and_traces "${experiment_id}" "agw.ai.usage.cost.total"
 }
@@ -1103,8 +1097,12 @@ deploy_router() {
     --wait --timeout "${VSR_READY_TIMEOUT_SEC}s"
   verify_router_services
 
-  log "Applying routed semantic-routing configuration and demo baseline lanes"
+  log "Applying routed semantic-routing configuration and demo baseline route"
   kubectl apply -f "${EXAMPLE_DIR}/k8s/agentgateway-routing.yaml"
+  kubectl delete \
+    agentgatewaybackend/openai-baseline-low-cost \
+    httproute/openai-baseline-low-cost \
+    --namespace "${NAMESPACE}" --ignore-not-found
   kubectl apply -f "${CONFIG_DIR}/evaluation-lanes.yaml"
   kubectl wait --for=condition=Accepted agentgatewaybackend --all \
     --namespace "${NAMESPACE}" --timeout=300s
@@ -1118,7 +1116,7 @@ deploy_router() {
   fi
   retry_until "accepted and attached agentgateway policies" \
     "${VERIFY_TIMEOUT_SEC}" "${VERIFY_INTERVAL_SEC}" agentgateway_policies_ready
-  log "Verified routed configuration, demo baseline lanes, and telemetry policy"
+  log "Verified routed configuration, demo baseline route, and telemetry policy"
 }
 
 gateway_url() {
@@ -1235,10 +1233,7 @@ write_metadata() {
   VSR_IMAGE="${VSR_IMAGE_TAG}" \
   OBS_PROFILE="${OBSERVABILITY_PROFILE}" \
   EVAL_DATASET="${EVAL_DATASET}" \
-  EVAL_DATASET_ROLE="${EVAL_DATASET_ROLE}" \
-  EVAL_MANIFEST="${EVAL_MANIFEST}" \
   python3 - <<'PY'
-import hashlib
 import json
 import os
 from datetime import datetime, timezone
@@ -1256,20 +1251,10 @@ metadata = {
     "observability_profile": os.environ["OBS_PROFILE"],
     "dataset": {
         "path": os.environ["EVAL_DATASET"],
-        "role": os.environ["EVAL_DATASET_ROLE"],
     },
     "requests": len(rows),
     "selected_models": sorted({row.get("selected_model", "") for row in rows if row.get("selected_model")}),
 }
-manifest_path = os.environ["EVAL_MANIFEST"]
-with open(os.environ["EVAL_DATASET"], "rb") as stream:
-    metadata["dataset"]["sha256"] = hashlib.file_digest(stream, "sha256").hexdigest()
-if manifest_path:
-    with open(manifest_path, "rb") as stream:
-        metadata["selection_manifest"] = {
-            "path": manifest_path,
-            "sha256": hashlib.file_digest(stream, "sha256").hexdigest(),
-        }
 path = os.path.join(os.path.dirname(os.environ["RESULT_FILE"]), os.environ["RUN_ID"] + "-metadata.json")
 with open(path, "w", encoding="utf-8") as stream:
     json.dump(metadata, stream, indent=2)
@@ -1279,13 +1264,11 @@ PY
 }
 
 run_eval_file() {
-  local run_id="$1" output="$2" limit="$3" selection_manifest="${4:-}"
-  local capture_args=() manifest_args=()
+  local run_id="$1" output="$2" limit="$3"
+  local capture_args=() validation_args=()
   if [[ "${CAPTURE_OUTPUT}" == "true" ]]; then
     capture_args+=(--capture-output)
-  fi
-  if [[ -n "${selection_manifest}" ]]; then
-    manifest_args+=(--selection-manifest "${selection_manifest}")
+    validation_args+=(--require-response-text)
   fi
   python3 "${ROOT_DIR}/scripts/run_eval.py" \
     --gateway-url "$(gateway_url)" \
@@ -1294,10 +1277,12 @@ run_eval_file() {
     --run-id "${run_id}" \
     --output "${output}" \
     --limit "${limit}" \
+    --lanes "${EVAL_LANES}" \
+    --reasoning-effort "${EVAL_REASONING_EFFORT}" \
     --delay-sec "${EVAL_DELAY_SEC}" \
-    "${manifest_args[@]}" \
     "${capture_args[@]}"
-  python3 "${ROOT_DIR}/scripts/validate_results.py" "${output}"
+  python3 "${ROOT_DIR}/scripts/validate_results.py" \
+    "${output}" --expected-lanes "${EVAL_LANES}" "${validation_args[@]}"
 }
 
 cmd_eval() {
@@ -1319,10 +1304,10 @@ cmd_eval() {
 
   local eval_turns="${EVAL_LIMIT}"
   if [[ "${EVAL_LIMIT}" == "0" ]]; then
-    eval_turns="all 200 corpus"
+    eval_turns="all 24 demo"
   fi
-  log "Running ${eval_turns} turns through routed, always_low_cost, and always_expensive"
-  run_eval_file "${run_id}" "${result_file}" "${EVAL_LIMIT}" "${EVAL_MANIFEST}"
+  log "Running ${eval_turns} prompts through routed and always_expensive"
+  run_eval_file "${run_id}" "${result_file}" "${EVAL_LIMIT}"
   printf '%s\n' "${result_file}" > "${RESULTS_DIR}/latest-result"
   write_metadata "${run_id}" "${result_file}"
 
@@ -1434,7 +1419,8 @@ cmd_review() {
     --dataset "${dataset}" \
     --output "${review_file}" \
     --key-output "${key_file}" \
-    --instructions-output "${instructions_file}"
+    --instructions-output "${instructions_file}" \
+    --limit "${REVIEW_LIMIT}"
   printf 'Review CSV: %s\n' "${review_file}"
   printf 'Reviewer instructions: %s\n' "${instructions_file}"
   printf 'Keep the blind key separate from reviewers: %s\n' "${key_file}"

@@ -33,7 +33,7 @@ def load_quality_review(path):
         return None
     with Path(path).open(encoding="utf-8") as stream:
         review = json.load(stream)
-    required = {"reviewed", "total", "quality_retention", "pairwise"}
+    required = {"reviewed", "total", "acceptance_comparison", "pairwise"}
     missing = sorted(required - set(review))
     if missing:
         raise ValueError(f"{path}: quality review is missing: {', '.join(missing)}")
@@ -81,6 +81,22 @@ def routing_summary(rows, catalog):
     }
 
 
+def routed_model_mix(rows, catalog):
+    routed = [row for row in rows if row.get("lane") == "routed" and row.get("ok")]
+    if not routed:
+        return None
+    counts = defaultdict(int)
+    for row in routed:
+        counts[canonical_model(catalog, row.get("selected_model"))] += 1
+    return {
+        "total": len(routed),
+        "models": [
+            {"model": model, "requests": count, "fraction": count / len(routed)}
+            for model, count in sorted(counts.items())
+        ],
+    }
+
+
 def savings(rows, catalog, expensive_model):
     grouped = defaultdict(list)
     for row in rows:
@@ -117,6 +133,7 @@ def build_summary(rows, catalog, expensive_model, quality_review=None):
     return {
         "lanes": lane_summary(rows),
         "routing": routing_summary(rows, catalog),
+        "routed_model_mix": routed_model_mix(rows, catalog),
         "savings": savings(rows, catalog, expensive_model),
         "quality_review": quality_review,
     }
@@ -135,27 +152,20 @@ def render_summary(summary):
             lines.append(f"{label}: ${values['always_expensive_cost_usd']:.6f} always_expensive vs ${values['routed_cost_usd']:.6f} routed = {values['savings_fraction']:.1%}")
     quality_review = summary["quality_review"]
     if quality_review:
-        retention = quality_review["quality_retention"]
+        acceptance = quality_review["acceptance_comparison"]
         pairwise = quality_review["pairwise"]
-        capability_need = quality_review.get("capability_need", {})
         quality_scores = quality_review.get("quality_scores", {})
-        retention_value = retention.get("fraction")
-        retention_text = "unavailable" if retention_value is None else f"{retention_value:.1%}"
+        acceptance_value = acceptance.get("fraction")
+        acceptance_text = "unavailable" if acceptance_value is None else f"{acceptance_value:.1%}"
         lines.extend((
-            "\nBlinded answer-quality review",
+            "\nBlinded answer spot check",
             f"Review coverage: {quality_review['reviewed']}/{quality_review['total']} = {quality_review['coverage_fraction']:.1%}",
-            "Quality retained: "
-            f"{retention['routed_acceptable']}/{retention['always_expensive_acceptable']} "
-            f"= {retention_text}",
+            "Acceptance compared with always-expensive baseline: "
+            f"{acceptance['routed_acceptable']}/{acceptance['always_expensive_acceptable']} "
+            f"= {acceptance_text}",
             "Routed materially worse than the expensive baseline: "
             f"{pairwise['routed_materially_worse_than_expensive']}/{pairwise['reviewed']}",
         ))
-        if capability_need:
-            lines.append(
-                "High-required tasks routed to the lower-cost model: "
-                f"{capability_need['high_required_routed_low_cost']}/"
-                f"{capability_need['high_required']}"
-            )
         if quality_scores:
             lines.append(
                 "Average reviewer quality score: "
@@ -163,7 +173,7 @@ def render_summary(summary):
                 f"always_expensive={quality_scores['always_expensive']['average']:.2f}"
             )
     else:
-        lines.append("\nBlinded answer-quality review: pending")
+        lines.append("\nBlinded answer spot check: pending")
     return "\n".join(lines) + "\n"
 
 

@@ -14,7 +14,7 @@ from pathlib import Path
 SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
-from corpus import balanced_subset, load_corpus, manifest_subset
+from corpus import load_corpus
 
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
@@ -39,19 +39,25 @@ def parse_args():
     )
     parser.add_argument("--gateway-url", default="")
     parser.add_argument("--path", default="/v1/chat/completions")
-    parser.add_argument("--dataset", default=ROOT_DIR / "data" / "tuning-corpus.jsonl", type=Path)
+    parser.add_argument("--dataset", default=ROOT_DIR / "data" / "demo-corpus.jsonl", type=Path)
     parser.add_argument("--catalog", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--run-id", default=datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ"))
-    parser.add_argument("--lanes", default="routed,always_low_cost,always_expensive")
-    parser.add_argument("--low-cost-model", default="gpt-5.4-nano")
+    parser.add_argument("--lanes", default="routed,always_expensive")
     parser.add_argument("--expensive-model", default="gpt-5.5")
     parser.add_argument("--auto-model", default="auto")
-    parser.add_argument("--system-prompt", default="You are a concise technical assistant. Answer directly.")
+    parser.add_argument(
+        "--system-prompt",
+        default="You are a concise technical assistant. Answer directly in at most 400 tokens.",
+    )
+    parser.add_argument(
+        "--reasoning-effort",
+        default="none",
+        help="OpenAI reasoning effort sent to both evaluation lanes; empty omits it.",
+    )
     parser.add_argument("--temperature", type=float, default=None)
     parser.add_argument("--timeout", type=float, default=180.0)
     parser.add_argument("--limit", type=int, default=0)
-    parser.add_argument("--selection-manifest", type=Path)
     parser.add_argument("--seed", type=int, default=7)
     parser.add_argument("--delay-sec", type=float, default=0.0)
     parser.add_argument("--capture-output", action="store_true")
@@ -107,8 +113,6 @@ def estimate_cost(catalog, request_model, response_model, usage):
 def request_model(args, lane):
     if lane == "routed":
         return args.auto_model
-    if lane == "always_low_cost":
-        return args.low_cost_model
     if lane == "always_expensive":
         return args.expensive_model
     raise SystemExit(f"unknown lane: {lane}")
@@ -190,6 +194,8 @@ def run_one(args, catalog, url, item, lane):
         "messages": request_messages(args, item),
         "max_tokens": item.get("max_tokens", 180),
     }
+    if args.reasoning_effort:
+        payload["reasoning_effort"] = args.reasoning_effort
     if args.temperature is not None:
         payload["temperature"] = args.temperature
     status, response_headers, raw, error, latency_ms = post_json(url, payload, headers, args.timeout)
@@ -242,17 +248,10 @@ def main():
     catalog = load_catalog(args.catalog)
     try:
         corpus_items = load_corpus(args.dataset)
-        if args.selection_manifest:
-            items = manifest_subset(corpus_items, args.selection_manifest)
-            if args.limit and args.limit != len(items):
-                raise ValueError(
-                    f"{args.selection_manifest}: contains {len(items)} ids, "
-                    f"but --limit is {args.limit}"
-                )
-            selection = f"manifest={args.selection_manifest}"
-        else:
-            items = balanced_subset(corpus_items, args.limit, args.seed)
-            selection = "balanced" if args.limit else "all"
+        if args.limit < 0:
+            raise ValueError("--limit must not be negative")
+        items = corpus_items[:args.limit] if args.limit else corpus_items
+        selection = "first_n" if args.limit else "all"
     except ValueError as error:
         raise SystemExit(str(error)) from error
     lanes = [lane.strip() for lane in args.lanes.split(",") if lane.strip()]

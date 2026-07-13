@@ -2,6 +2,7 @@ import csv
 import importlib.util
 import io
 import json
+import subprocess
 import tempfile
 import unittest
 from contextlib import redirect_stdout
@@ -73,7 +74,6 @@ class PrometheusReportTest(unittest.TestCase):
                     }
                     for lane, model, response_model in (
                         ("routed", "gpt-5.4-nano", "gpt-5.4-nano-2026-07-01"),
-                        ("always_low_cost", "gpt-5.4-nano", "gpt-5.4-nano-2026-07-01"),
                         ("always_expensive", "gpt-5.5", "gpt-5.5-2026-07-01"),
                     )
                     for token_type, value in (("input", "100"), ("output", "10"))
@@ -108,8 +108,9 @@ class PrometheusReportTest(unittest.TestCase):
                         "run_id": "test-run",
                         "timestamp": f"2026-07-10T19:20:0{second}+00:00",
                         "latency_ms": 1000,
+                        "lane": lane,
                     })
-                    for second in (1, 2, 3)
+                    for second, lane in ((1, "routed"), (2, "always_expensive"))
                 ) + "\n",
                 encoding="utf-8",
             )
@@ -119,14 +120,12 @@ class PrometheusReportTest(unittest.TestCase):
 
         self.assertEqual(report["scope"], "experiment")
         self.assertEqual(report["experiment_id"], "test-run")
-        self.assertEqual(report["expected_requests"], 3)
+        self.assertEqual(report["expected_requests"], 2)
         self.assertEqual(report["observed_catalog_lookups"], 3)
         self.assertEqual(
             report["experiment_started_at"], "2026-07-10T19:20:00+00:00"
         )
-        self.assertEqual(
-            report["experiment_ended_at"], "2026-07-10T19:20:03+00:00"
-        )
+        self.assertEqual(report["experiment_ended_at"], "2026-07-10T19:20:02+00:00")
         self.assertNotIn("window", report)
         expensive = next(
             row
@@ -147,7 +146,7 @@ class PrometheusReportTest(unittest.TestCase):
                         "gen_ai_request_model": "gpt-5.5",
                         "gen_ai_response_model": "gpt-5.5-2026-07-01",
                     },
-                    "value": [0, "1"],
+                    "value": [0, "2"],
                 }]
             return [{
                 "metric": {
@@ -174,6 +173,12 @@ class PrometheusReportTest(unittest.TestCase):
                 "run_id": "test-run",
                 "timestamp": "2026-07-10T19:20:01+00:00",
                 "latency_ms": 500,
+                "lane": "routed",
+            }) + "\n" + json.dumps({
+                "run_id": "test-run",
+                "timestamp": "2026-07-10T19:20:02+00:00",
+                "latency_ms": 500,
+                "lane": "always_expensive",
             }) + "\n", encoding="utf-8")
             with self.assertRaisesRegex(RuntimeError, "missing evaluation lanes"):
                 prometheus_report.build_report(
@@ -237,10 +242,6 @@ class RenderExperimentChartTest(unittest.TestCase):
             "run_id": "test-run",
             "local": {
                 "lanes": {
-                    "always_low_cost": {
-                        "cost_estimate_usd": 0.02,
-                        "latency_ms": {"p50": 800, "p95": 1200},
-                    },
                     "routed": {
                         "cost_estimate_usd": 0.70,
                         "latency_ms": {"p50": 2500, "p95": 4000},
@@ -253,7 +254,7 @@ class RenderExperimentChartTest(unittest.TestCase):
                 "quality_review": {
                     "reviewed": 20,
                     "total": 20,
-                    "quality_retention": {
+                    "acceptance_comparison": {
                         "routed_acceptable": 19,
                         "always_expensive_acceptable": 20,
                         "fraction": 0.95,
@@ -264,12 +265,18 @@ class RenderExperimentChartTest(unittest.TestCase):
                         "fraction": 0.05,
                     },
                 },
+                "routed_model_mix": {
+                    "total": 20,
+                    "models": [
+                        {"model": "gpt-5.4-nano", "requests": 12, "fraction": 0.6},
+                        {"model": "gpt-5.5", "requests": 8, "fraction": 0.4},
+                    ],
+                },
             },
             "prometheus": {
                 "status": "collected",
                 "report": {
                     "catalog_backed_realized_cost_by_lane": [
-                        {"eval_lane": "always_low_cost", "cost_usd": 0.01},
                         {"eval_lane": "routed", "cost_usd": 0.25},
                         {"eval_lane": "routed", "cost_usd": 0.35},
                         {"eval_lane": "always_expensive", "cost_usd": 1.00},
@@ -286,6 +293,7 @@ class RenderExperimentChartTest(unittest.TestCase):
         self.assertIn("40.0%", chart)
         self.assertIn("95.0%", chart)
         self.assertIn("19 routed / 20 expensive accepted", chart)
+        self.assertIn("12 gpt-5.4-nano | 8 gpt-5.5", chart)
         self.assertIn("2.50 s p50", chart)
         self.assertIn("Catalog-priced agentgateway metrics", chart)
 
@@ -298,7 +306,6 @@ class RenderExperimentChartTest(unittest.TestCase):
                         "latency_ms": {"p50": 1000, "p95": 2000},
                     }
                     for lane, cost in (
-                        ("always_low_cost", 0.01),
                         ("routed", 0.50),
                         ("always_expensive", 1.00),
                     )
@@ -345,69 +352,27 @@ class EvaluationToolingTest(unittest.TestCase):
         )
 
     def test_default_corpus_has_expected_model_mix(self):
-        dataset = DEMO_DIR / "data" / "tuning-corpus.jsonl"
-        conversations = [
-            json.loads(line)
-            for line in dataset.read_text(encoding="utf-8").splitlines()
-            if line
-        ]
+        dataset = DEMO_DIR / "data" / "demo-corpus.jsonl"
         rows = corpus.load_corpus(dataset)
 
-        self.assertEqual(len(conversations), 50)
         self.assertEqual(len({row["id"] for row in rows}), len(rows))
-        self.assertEqual(len(rows), 200)
+        self.assertEqual(len(rows), 24)
         self.assertEqual(
-            sum(row["expected_model"] == "gpt-5.4-nano" for row in rows), 90
+            sum(row["expected_model"] == "gpt-5.4-nano" for row in rows), 12
         )
         self.assertEqual(
-            sum(row["expected_model"] == "gpt-5.5" for row in rows), 110
+            sum(row["expected_model"] == "gpt-5.5" for row in rows), 12
         )
         self.assertEqual(
             {row["language"] for row in rows}, {"go", "rust"}
         )
-        self.assertEqual(sum(row["language"] == "go" for row in rows), 100)
-        self.assertEqual(sum(row["language"] == "rust" for row in rows), 100)
-        for conversation_item in conversations:
-            self.assertEqual(len(conversation_item["turns"]), 4)
+        self.assertEqual(sum(row["language"] == "go" for row in rows), 12)
+        self.assertEqual(sum(row["language"] == "rust" for row in rows), 12)
+        self.assertEqual({row["max_tokens"] for row in rows if "routine" in row["family"]}, {256})
+        self.assertEqual({row["max_tokens"] for row in rows if "advanced" in row["family"]}, {1024})
         for row in rows:
             self.assertEqual(row["messages"][-1]["role"], "user")
-            self.assertEqual(len(row["messages"]), row["turn"] * 2 - 1)
-        final_turns = [row for row in rows if row["turn"] == 4]
-        self.assertTrue(all(len(row["messages"]) == 7 for row in final_turns))
-
-    def test_limited_corpus_is_model_balanced(self):
-        dataset = DEMO_DIR / "data" / "tuning-corpus.jsonl"
-        rows = corpus.load_corpus(dataset)
-
-        selected = corpus.balanced_subset(rows, 50)
-
-        self.assertEqual(len(selected), 50)
-        self.assertEqual(
-            sum(row["expected_model"] == "gpt-5.4-nano" for row in selected), 25
-        )
-        self.assertEqual(
-            sum(row["expected_model"] == "gpt-5.5" for row in selected), 25
-        )
-        self.assertEqual({row["language"] for row in selected}, {"go", "rust"})
-        self.assertEqual({row["turn"] for row in selected}, {1, 2, 3, 4})
-        self.assertEqual(selected, corpus.balanced_subset(rows, 50))
-
-    def test_fixed_manifest_preserves_tuning_subset(self):
-        dataset = DEMO_DIR / "data" / "tuning-corpus.jsonl"
-        manifest = DEMO_DIR / "data" / "tuning-50-manifest.json"
-        rows = corpus.load_corpus(dataset)
-
-        selected = corpus.manifest_subset(rows, manifest)
-        manifest_ids = json.loads(manifest.read_text(encoding="utf-8"))["ids"]
-
-        self.assertEqual([row["id"] for row in selected], manifest_ids)
-        self.assertEqual(len(selected), 50)
-        self.assertEqual(
-            sum(row["expected_model"] == "gpt-5.4-nano" for row in selected), 25
-        )
-        self.assertEqual(
-            sum(row["expected_model"] == "gpt-5.5" for row in selected), 25
-        )
+            self.assertEqual(len(row["messages"]), 1)
 
     def test_evaluator_preserves_corpus_history(self):
         item = {
@@ -451,34 +416,32 @@ class EvaluationToolingTest(unittest.TestCase):
             0.0006,
         )
 
-    def test_blind_review_scores_quality_retention_without_lane_names_in_csv(self):
+    def test_blind_review_scores_ab_spot_check_without_lane_names_in_csv(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            dataset = root / "holdout.jsonl"
+            dataset = root / "demo.jsonl"
             results = root / "results.jsonl"
             review = root / "review.csv"
             blind_key = root / "blind-key.json"
             dataset.write_text(json.dumps({
-                "id": "private-holdout",
+                "id": "developer-prompt",
                 "language": "go",
-                "turns": [{
-                    "family": "holdout_go",
-                    "expected_model": "gpt-expensive",
-                    "max_tokens": 100,
-                    "user": "Diagnose this production Go failure.",
-                }],
+                "family": "advanced_go",
+                "expected_model": "gpt-expensive",
+                "max_tokens": 100,
+                "prompt": "Diagnose this production Go failure.",
             }) + "\n", encoding="utf-8")
             result_rows = [
                 {
                     "run_id": "quality-run",
-                    "id": "private-holdout-turn-1",
+                    "id": "developer-prompt",
                     "lane": lane,
-                    "selected_model": "gpt-expensive" if lane != "always_low_cost" else "gpt-cheap",
-                    "response_model": "gpt-expensive" if lane != "always_low_cost" else "gpt-cheap",
+                    "selected_model": "gpt-expensive",
+                    "response_model": "gpt-expensive",
                     "ok": True,
                     "response_text": "Answer text",
                 }
-                for lane in ("routed", "always_low_cost", "always_expensive")
+                for lane in ("routed", "always_expensive")
             ]
             results.write_text(
                 "\n".join(json.dumps(row) for row in result_rows) + "\n",
@@ -496,23 +459,19 @@ class EvaluationToolingTest(unittest.TestCase):
             prepare_blind_review.write_instructions(instructions)
             review_text = review.read_text(encoding="utf-8")
             self.assertNotIn("always_expensive", review_text)
-            self.assertNotIn("always_low_cost", review_text)
-            self.assertIn("Do not try to infer the model", instructions.read_text(encoding="utf-8"))
+            self.assertIn("two shuffled answers", instructions.read_text(encoding="utf-8"))
 
             with review.open(encoding="utf-8", newline="") as stream:
                 completed = list(csv.DictReader(stream))
             mapping = key_rows[0]["answer_mapping"]
-            for letter in ("a", "b", "c"):
-                lane = mapping[letter]["lane"]
+            for letter in ("a", "b"):
                 completed[0][f"answer_{letter}_quality_1_to_5"] = "4"
-                completed[0][f"answer_{letter}_acceptable_yes_no"] = (
-                    "no" if lane == "always_low_cost" else "yes"
-                )
+                completed[0][f"answer_{letter}_acceptable_yes_no"] = "yes"
             expensive_letter = next(
                 letter for letter, value in mapping.items()
                 if value["lane"] == "always_expensive"
             )
-            completed[0]["materially_best_answer_a_b_c_none_unclear"] = expensive_letter
+            completed[0]["materially_better_answer_a_b_none_unclear"] = expensive_letter
             with review.open("w", encoding="utf-8", newline="") as stream:
                 writer = csv.DictWriter(
                     stream, fieldnames=prepare_blind_review.REVIEW_FIELDS
@@ -524,9 +483,44 @@ class EvaluationToolingTest(unittest.TestCase):
             completed_reviews = score_blind_review.load_completed_reviews(review, key)
             quality = score_blind_review.score(completed_reviews, 1, "quality-run")
 
-            self.assertEqual(quality["quality_retention"]["fraction"], 1.0)
+            self.assertEqual(quality["acceptance_comparison"]["fraction"], 1.0)
             self.assertEqual(quality["pairwise"]["routed_materially_worse_than_expensive"], 1)
-            self.assertEqual(quality["capability_need"]["high_required"], 1)
+
+    def test_captured_run_rejects_empty_answer_text(self):
+        with tempfile.TemporaryDirectory() as directory:
+            results = Path(directory) / "results.jsonl"
+            rows = [
+                {
+                    "lane": "routed",
+                    "ok": True,
+                    "response_text": "",
+                    "vsr_headers": {"x-vsr-selected-decision": "route_to_low_cost"},
+                },
+                {
+                    "lane": "always_expensive",
+                    "ok": True,
+                    "response_text": "A complete answer.",
+                },
+            ]
+            results.write_text(
+                "\n".join(json.dumps(row) for row in rows) + "\n",
+                encoding="utf-8",
+            )
+
+            completed = subprocess.run(
+                [
+                    "python3",
+                    str(DEMO_DIR / "scripts" / "validate_results.py"),
+                    str(results),
+                    "--require-response-text",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertIn("had no assistant response text", completed.stdout)
 
 
 class VerifyObservabilityTest(unittest.TestCase):

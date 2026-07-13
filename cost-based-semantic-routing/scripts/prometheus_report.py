@@ -8,9 +8,6 @@ from collections import defaultdict
 from datetime import datetime, timedelta
 
 
-EXPECTED_LANES = {"routed", "always_low_cost", "always_expensive"}
-
-
 def query(base_url, expression):
     url = f"{base_url.rstrip('/')}/api/v1/query?{urllib.parse.urlencode({'query': expression})}"
     with urllib.request.urlopen(url, timeout=20) as response:
@@ -71,6 +68,7 @@ def load_result_metadata(path, experiment_id):
         requests.append((started_at, completed_at))
     return {
         "expected_requests": len(rows),
+        "expected_lanes": sorted({row.get("lane", "") for row in rows if row.get("lane")}),
         "started_at": min(started for started, _ in requests).isoformat(),
         "ended_at": max(completed for _, completed in requests).isoformat(),
     }
@@ -192,8 +190,9 @@ def build_report(base_url, experiment_id, catalog_path, results_path):
 
     lane_costs, model_costs = calculate_costs(token_rows, load_catalog(catalog_path))
     observed_lanes = {row["eval_lane"] for row in lane_costs}
-    if not EXPECTED_LANES.issubset(observed_lanes):
-        missing = sorted(EXPECTED_LANES - observed_lanes)
+    expected_lanes = set(result_metadata["expected_lanes"])
+    if not expected_lanes.issubset(observed_lanes):
+        missing = sorted(expected_lanes - observed_lanes)
         raise RuntimeError("cost metrics are missing evaluation lanes: " + ", ".join(missing))
     if sum(row["cost_usd"] for row in lane_costs) <= 0:
         raise RuntimeError(f"catalog-priced token cost is zero for {experiment_id}")
@@ -204,6 +203,7 @@ def build_report(base_url, experiment_id, catalog_path, results_path):
         "experiment_started_at": result_metadata["started_at"],
         "experiment_ended_at": result_metadata["ended_at"],
         "expected_requests": expected_requests,
+        "expected_lanes": sorted(expected_lanes),
         "observed_catalog_lookups": observed_lookups,
         "cost_source": "agentgateway token metrics priced with the loaded model catalog",
         "catalog_backed_realized_cost_by_lane": lane_costs,

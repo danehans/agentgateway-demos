@@ -8,7 +8,6 @@ from pathlib import Path
 
 
 LANES = (
-    ("always_low_cost", "Lower-cost only", "#2563eb"),
     ("routed", "Semantic routing", "#0f766e"),
     ("always_expensive", "Always expensive", "#475569"),
 )
@@ -45,19 +44,18 @@ def cost_data(summary):
         if lane in lanes and "cost_estimate_usd" in lanes[lane]
     }
     if not all(lane in costs for lane, _, _ in LANES):
-        raise ValueError("summary does not contain costs for all experiment lanes")
+        raise ValueError("summary does not contain costs for routed and always-expensive lanes")
     return costs, "Local token-cost estimate"
 
 
 def metric_data(summary):
     local = summary.get("local", {})
     lanes = local.get("lanes", {})
-    required_lanes = ("routed", "always_expensive")
-    if not all(lane in lanes for lane in required_lanes):
+    if not all(lane in lanes for lane, _, _ in LANES):
         raise ValueError("summary does not contain routed and always-expensive latency")
-    quality_review = local.get("quality_review")
     return {
-        "quality_review": quality_review,
+        "quality_review": local.get("quality_review"),
+        "model_mix": local.get("routed_model_mix"),
         "routed_p50": float(lanes["routed"]["latency_ms"]["p50"]) / 1000,
         "routed_p95": float(lanes["routed"]["latency_ms"]["p95"]) / 1000,
         "expensive_p50": float(lanes["always_expensive"]["latency_ms"]["p50"]) / 1000,
@@ -69,6 +67,32 @@ def text(value):
     return escape(str(value), quote=True)
 
 
+def review_metrics(quality_review):
+    acceptance = quality_review.get("acceptance_comparison") if quality_review else None
+    fraction = acceptance.get("fraction") if acceptance else None
+    if fraction is None:
+        return "Pending", "Complete a blinded A/B answer spot check", 0.0
+    detail = (
+        f"{acceptance['routed_acceptable']} routed / "
+        f"{acceptance['always_expensive_acceptable']} expensive accepted"
+    )
+    return f"{fraction:.1%}", detail, max(0, min(1, fraction))
+
+
+def model_mix_detail(model_mix):
+    if not model_mix:
+        return "No successful routed requests", 0.0
+    models = model_mix.get("models", [])
+    if not models:
+        return "No selected models recorded", 0.0
+    parts = [f"{item['requests']} {item['model']}" for item in models]
+    cheap_fraction = next(
+        (item["fraction"] for item in models if item["model"] == "gpt-5.4-nano"),
+        0.0,
+    )
+    return " | ".join(parts), cheap_fraction
+
+
 def render_chart(summary):
     costs, cost_source = cost_data(summary)
     metrics = metric_data(summary)
@@ -78,10 +102,11 @@ def render_chart(summary):
     p50_change = 0.0 if metrics["expensive_p50"] == 0 else (
         metrics["routed_p50"] / metrics["expensive_p50"] - 1
     )
+    review_value, review_detail, review_fraction = review_metrics(metrics["quality_review"])
+    mix_detail, cheap_fraction = model_mix_detail(metrics["model_mix"])
     run_id = summary.get("run_id", "semantic-routing-experiment")
     max_cost = max(costs.values())
 
-    width = 960
     bars = []
     for index, (lane, label, color) in enumerate(LANES):
         y = 252 + index * 45
@@ -93,30 +118,9 @@ def render_chart(summary):
             f'<text class="value" x="665" y="{y + 17}">${costs[lane]:.4f}</text>',
         ))
 
-    quality_review = metrics["quality_review"]
-    quality = quality_review.get("quality_retention") if quality_review else None
-    quality_fraction = quality.get("fraction") if quality else None
-    quality_width = max(0, min(1, quality_fraction or 0)) * 230
-    quality_pending = quality_fraction is None
-    quality_value = "Pending" if quality_pending else f"{quality_fraction:.1%}"
-    if quality_pending:
-        quality_detail = "Blinded answer-quality review required"
-        review_detail = "Create and score a blinded review package"
-        review_value = "Pending"
-    else:
-        quality_detail = (
-            f"{quality['routed_acceptable']} routed / "
-            f"{quality['always_expensive_acceptable']} expensive accepted"
-        )
-        review_detail = (
-            f"{quality_review['reviewed']} of {quality_review['total']} "
-            "responses reviewed blind"
-        )
-        review_value = f"{quality_review['reviewed']} / {quality_review['total']}"
-    p50_delta = f"{p50_change:+.1%}"
-    return f'''<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="570" viewBox="0 0 {width} 570" role="img" aria-labelledby="title description">
+    return f'''<svg xmlns="http://www.w3.org/2000/svg" width="960" height="570" viewBox="0 0 960 570" role="img" aria-labelledby="title description">
   <title id="title">Semantic routing experiment results</title>
-  <desc id="description">Semantic routing cost, answer-quality review, and latency for run {text(run_id)}.</desc>
+  <desc id="description">Semantic routing spend, answer spot check, model mix, and latency for run {text(run_id)}.</desc>
   <style>
     text {{ font-family: Arial, Helvetica, sans-serif; fill: #0f172a; }}
     .title {{ font-size: 26px; font-weight: 700; }}
@@ -137,31 +141,38 @@ def render_chart(summary):
   <text class="kpi-value" x="48" y="151">{savings:.1%}</text>
   <text class="subtitle" x="48" y="173">Routed versus always expensive</text>
   <line x1="337" y1="112" x2="337" y2="177" stroke="#cbd5e1"/>
-  <text class="kpi-label" x="370" y="121">QUALITY RETAINED</text>
-  <text class="kpi-value" x="370" y="151">{quality_value}</text>
-  <text class="subtitle" x="370" y="173">{text(quality_detail)}</text>
+  <text class="kpi-label" x="370" y="121">A/B ACCEPTANCE</text>
+  <text class="kpi-value" x="370" y="151">{text(review_value)}</text>
+  <text class="subtitle" x="370" y="173">{text(review_detail)}</text>
   <line x1="655" y1="112" x2="655" y2="177" stroke="#cbd5e1"/>
   <text class="kpi-label" x="688" y="121">ROUTED P50 LATENCY</text>
   <text class="kpi-value" x="688" y="151">{metrics['routed_p50']:.2f} s</text>
-  <text class="subtitle" x="688" y="173">{p50_delta} versus always expensive</text>
+  <text class="subtitle" x="688" y="173">{p50_change:+.1%} versus always expensive</text>
 
-  <text class="section" x="48" y="218">COST PER BENCHMARK RUN (USD)</text>
+  <text class="section" x="48" y="218">COST PER DEMO RUN (USD)</text>
   {''.join(bars)}
-  <line x1="48" y1="405" x2="912" y2="405" stroke="#cbd5e1"/>
+  <line x1="48" y1="360" x2="912" y2="360" stroke="#cbd5e1"/>
 
-  <text class="section" x="48" y="440">BLINDED QUALITY REVIEW</text>
-  <rect x="48" y="455" width="230" height="18" fill="#e2e8f0"/>
-  <rect x="48" y="455" width="{quality_width:.1f}" height="18" fill="#0f766e"/>
-  <text class="metric" x="48" y="505">{text(review_value)}</text>
-  <text class="metric-detail" x="48" y="525">{text(review_detail)}</text>
+  <text class="section" x="48" y="395">ROUTED MODEL MIX</text>
+  <rect x="48" y="410" width="230" height="18" fill="#475569"/>
+  <rect x="48" y="410" width="{230 * cheap_fraction:.1f}" height="18" fill="#0f766e"/>
+  <text class="metric" x="48" y="460">{cheap_fraction:.0%} lower-cost</text>
+  <text class="metric-detail" x="48" y="481">{text(mix_detail)}</text>
 
-  <line x1="337" y1="431" x2="337" y2="525" stroke="#cbd5e1"/>
-  <text class="section" x="370" y="440">END-TO-END LATENCY</text>
-  <text class="metric" x="370" y="474">{metrics['routed_p50']:.2f} s p50</text>
-  <text class="metric-detail" x="370" y="496">{metrics['routed_p95']:.2f} s p95 for semantic routing</text>
-  <text class="metric-detail" x="370" y="518">Always expensive: {metrics['expensive_p50']:.2f} s p50, {metrics['expensive_p95']:.2f} s p95</text>
+  <line x1="337" y1="386" x2="337" y2="505" stroke="#cbd5e1"/>
+  <text class="section" x="370" y="395">BLINDED A/B SPOT CHECK</text>
+  <rect x="370" y="410" width="230" height="18" fill="#e2e8f0"/>
+  <rect x="370" y="410" width="{230 * review_fraction:.1f}" height="18" fill="#0f766e"/>
+  <text class="metric" x="370" y="460">{text(review_value)}</text>
+  <text class="metric-detail" x="370" y="481">{text(review_detail)}</text>
 
-  <text class="note" x="48" y="556">Costs compare complete lane runs. The structured summary also includes a same-token counterfactual.</text>
+  <line x1="655" y1="386" x2="655" y2="505" stroke="#cbd5e1"/>
+  <text class="section" x="688" y="395">END-TO-END LATENCY</text>
+  <text class="metric" x="688" y="429">{metrics['routed_p50']:.2f} s p50</text>
+  <text class="metric-detail" x="688" y="454">{metrics['routed_p95']:.2f} s p95 semantic routing</text>
+  <text class="metric-detail" x="688" y="481">Always expensive: {metrics['expensive_p50']:.2f} s p50, {metrics['expensive_p95']:.2f} s p95</text>
+
+  <text class="note" x="48" y="548">Costs compare complete lane runs. The structured summary also includes a same-token counterfactual.</text>
 </svg>
 '''
 

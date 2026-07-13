@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Create an anonymized answer-quality review package from one eval run."""
+"""Create a compact blinded A/B answer spot check from one demo run."""
 
 import argparse
 import csv
@@ -16,21 +16,18 @@ if str(SCRIPT_DIR) not in sys.path:
 from corpus import load_corpus
 
 
-LANES = ("routed", "always_low_cost", "always_expensive")
-ANSWER_LETTERS = ("a", "b", "c")
+LANES = ("routed", "always_expensive")
+ANSWER_LETTERS = ("a", "b")
 REVIEW_FIELDS = (
     "review_id",
     "conversation",
     "answer_a",
     "answer_b",
-    "answer_c",
     "answer_a_quality_1_to_5",
     "answer_b_quality_1_to_5",
-    "answer_c_quality_1_to_5",
     "answer_a_acceptable_yes_no",
     "answer_b_acceptable_yes_no",
-    "answer_c_acceptable_yes_no",
-    "materially_best_answer_a_b_c_none_unclear",
+    "materially_better_answer_a_b_none_unclear",
     "reviewer_id",
     "notes",
 )
@@ -38,7 +35,7 @@ REVIEW_FIELDS = (
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Create a blinded A/B/C answer-quality review CSV."
+        description="Create a blinded A/B answer-quality spot-check CSV."
     )
     parser.add_argument("results", type=Path)
     parser.add_argument("--dataset", required=True, type=Path)
@@ -46,6 +43,12 @@ def parse_args():
     parser.add_argument("--key-output", required=True, type=Path)
     parser.add_argument("--instructions-output", required=True, type=Path)
     parser.add_argument("--seed", type=int, default=7)
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=12,
+        help="Number of randomized prompts to include; 0 includes every prompt.",
+    )
     return parser.parse_args()
 
 
@@ -65,7 +68,7 @@ def transcript(messages):
     )
 
 
-def review_rows(results, items, seed):
+def review_rows(results, items, seed, limit=0):
     items_by_id = {item["id"]: item for item in items}
     grouped = defaultdict(dict)
     run_ids = set()
@@ -94,6 +97,10 @@ def review_rows(results, items, seed):
     randomizer = random.Random(seed)
     item_ids = sorted(grouped)
     randomizer.shuffle(item_ids)
+    if limit < 0:
+        raise ValueError("review limit must not be negative")
+    if limit:
+        item_ids = item_ids[:limit]
     for index, item_id in enumerate(item_ids, 1):
         lane_rows = grouped[item_id]
         missing = [lane for lane in LANES if lane not in lane_rows]
@@ -110,7 +117,7 @@ def review_rows(results, items, seed):
             for letter, lane in zip(ANSWER_LETTERS, shuffled_lanes)
         }
         item = items_by_id[item_id]
-        review_id = f"review-{index:04d}"
+        review_id = f"review-{index:03d}"
         review.append(
             {
                 "review_id": review_id,
@@ -122,8 +129,7 @@ def review_rows(results, items, seed):
                 **{
                     field: ""
                     for field in REVIEW_FIELDS
-                    if field
-                    not in {"review_id", "conversation", "answer_a", "answer_b", "answer_c"}
+                    if field not in {"review_id", "conversation", "answer_a", "answer_b"}
                 },
             }
         )
@@ -131,8 +137,6 @@ def review_rows(results, items, seed):
             {
                 "review_id": review_id,
                 "id": item_id,
-                "conversation_id": item.get("conversation_id", item_id),
-                "turn": item.get("turn", 1),
                 "answer_mapping": answer_mapping,
             }
         )
@@ -148,12 +152,11 @@ def write_review(path, rows):
 
 
 def write_key(path, run_id, results_path, key_rows):
-    digest = hashlib.sha256(results_path.read_bytes()).hexdigest()
     value = {
         "schema_version": 1,
         "run_id": run_id,
         "result_file": results_path.name,
-        "result_file_sha256": digest,
+        "result_file_sha256": hashlib.sha256(results_path.read_bytes()).hexdigest(),
         "reviews": key_rows,
     }
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -163,26 +166,19 @@ def write_key(path, run_id, results_path, key_rows):
 def write_instructions(path):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
-        """# Blinded Answer-Quality Review
+        """# Blinded Answer Spot Check
 
-Each row contains one developer conversation and three anonymously shuffled
-answers. Do not try to infer the model or routing lane. Assess the answer a
-developer would receive.
+Each row contains one developer prompt and two shuffled answers. Do not infer
+the model or routing lane. Assess the answer a developer would receive.
 
-For every answer:
+For each answer, enter a score from `1` (unusable) to `5` (correct, complete,
+and directly actionable), then enter `yes` or `no` for whether it is acceptable
+for the task. In `materially_better_answer_a_b_none_unclear`, choose `a` or `b`
+only when one answer would materially improve task completion. Use `none` when
+they are effectively equivalent and `unclear` when the prompt cannot be rated.
 
-1. Enter a quality score from `1` (unusable) to `5` (correct, complete, and
-   directly actionable).
-2. Enter `yes` in the acceptance column only when the answer clears the quality
-   bar for this task; otherwise enter `no`.
-3. In `materially_best_answer_a_b_c_none_unclear`, enter `a`, `b`, or `c` only
-   when that answer is materially better for completing the task. Enter `none`
-   when the answers are effectively equivalent, or `unclear` when the task
-   cannot be rated from the supplied context.
-
-Do not alter the review ID, transcript, answer text, or column names. Leave a
-row blank only when it cannot be reviewed. Do not receive the blind-key JSON
-until every assigned review is complete.
+Do not alter the review ID, prompt, answer text, or column names. Do not receive
+the blind-key JSON until all assigned reviews are complete.
 """,
         encoding="utf-8",
     )
@@ -191,7 +187,7 @@ until every assigned review is complete.
 def main():
     args = parse_args()
     review, key, run_id = review_rows(
-        load_results(args.results), load_corpus(args.dataset), args.seed
+        load_results(args.results), load_corpus(args.dataset), args.seed, args.limit
     )
     write_review(args.output, review)
     write_key(args.key_output, run_id, args.results, key)

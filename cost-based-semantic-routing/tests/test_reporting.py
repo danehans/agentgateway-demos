@@ -369,6 +369,23 @@ class EvaluationToolingTest(unittest.TestCase):
         self.assertEqual({row["turn"] for row in selected}, {1, 2, 3, 4})
         self.assertEqual(selected, corpus.balanced_subset(rows, 50))
 
+    def test_fixed_manifest_preserves_tuning_subset(self):
+        dataset = DEMO_DIR / "data" / "eval-corpus.jsonl"
+        manifest = DEMO_DIR / "data" / "eval-50-manifest.json"
+        rows = corpus.load_corpus(dataset)
+
+        selected = corpus.manifest_subset(rows, manifest)
+        manifest_ids = json.loads(manifest.read_text(encoding="utf-8"))["ids"]
+
+        self.assertEqual([row["id"] for row in selected], manifest_ids)
+        self.assertEqual(len(selected), 50)
+        self.assertEqual(
+            sum(row["expected_model"] == "gpt-5.4-nano" for row in selected), 25
+        )
+        self.assertEqual(
+            sum(row["expected_model"] == "gpt-5.5" for row in selected), 25
+        )
+
     def test_evaluator_preserves_corpus_history(self):
         item = {
             "id": "conversation-turn-2",

@@ -14,7 +14,7 @@ from pathlib import Path
 SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
-from corpus import balanced_subset, load_corpus
+from corpus import balanced_subset, load_corpus, manifest_subset
 
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
@@ -51,6 +51,7 @@ def parse_args():
     parser.add_argument("--temperature", type=float, default=None)
     parser.add_argument("--timeout", type=float, default=180.0)
     parser.add_argument("--limit", type=int, default=0)
+    parser.add_argument("--selection-manifest", type=Path)
     parser.add_argument("--seed", type=int, default=7)
     parser.add_argument("--delay-sec", type=float, default=0.0)
     parser.add_argument("--capture-output", action="store_true")
@@ -240,14 +241,25 @@ def main():
     args = parse_args()
     catalog = load_catalog(args.catalog)
     try:
-        items = balanced_subset(load_corpus(args.dataset), args.limit, args.seed)
+        corpus_items = load_corpus(args.dataset)
+        if args.selection_manifest:
+            items = manifest_subset(corpus_items, args.selection_manifest)
+            if args.limit and args.limit != len(items):
+                raise ValueError(
+                    f"{args.selection_manifest}: contains {len(items)} ids, "
+                    f"but --limit is {args.limit}"
+                )
+            selection = f"manifest={args.selection_manifest}"
+        else:
+            items = balanced_subset(corpus_items, args.limit, args.seed)
+            selection = "balanced" if args.limit else "all"
     except ValueError as error:
         raise SystemExit(str(error)) from error
     lanes = [lane.strip() for lane in args.lanes.split(",") if lane.strip()]
     url = request_url(args.gateway_url, args.path)
     jobs = [(item, lane) for item in items for lane in lanes]
     random.Random(args.seed).shuffle(jobs)
-    print(f"run_id={args.run_id}\nurl={url}\ndataset_items={len(items)} lanes={','.join(lanes)} total_requests={len(jobs)}\noutput={args.output}")
+    print(f"run_id={args.run_id}\nurl={url}\ndataset_items={len(items)} selection={selection} lanes={','.join(lanes)} total_requests={len(jobs)}\noutput={args.output}")
     if args.dry_run:
         for item, lane in jobs[:10]:
             print(f"dry-run {lane} {item['id']} model={request_model(args, lane)}")

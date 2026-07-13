@@ -25,6 +25,10 @@ if [[ -z "${OBSERVABILITY_PROFILE:-}" && -f "${WORK_DIR}/observability-profile" 
 fi
 OBSERVABILITY_PROFILE="${OBSERVABILITY_PROFILE:-full}"
 EVAL_LIMIT="${EVAL_LIMIT:-0}"
+EVAL_MANIFEST="${EVAL_MANIFEST:-}"
+if [[ "${EVAL_LIMIT}" == "50" && -z "${EVAL_MANIFEST}" ]]; then
+  EVAL_MANIFEST="${ROOT_DIR}/data/eval-50-manifest.json"
+fi
 SMOKE_LIMIT="${SMOKE_LIMIT:-2}"
 EVAL_DELAY_SEC="${EVAL_DELAY_SEC:-1}"
 CAPTURE_OUTPUT="${CAPTURE_OUTPUT:-false}"
@@ -260,7 +264,10 @@ Important environment variables:
   HF_TOKEN                Optional; raises Hugging Face download rate limits
   OBSERVABILITY_PROFILE   full (default), metrics, or none
   EVAL_LIMIT              Corpus turns to run; defaults to all 200 (600 requests).
-                          A nonzero limit selects a model-balanced subset.
+                          50 uses the checked-in fixed tuning manifest; other
+                          nonzero limits select a model-balanced subset.
+  EVAL_MANIFEST           Optional JSON manifest of exact corpus IDs to run.
+                          It must contain EVAL_LIMIT IDs when a limit is set.
   CAPTURE_OUTPUT          true to save model responses for satisfaction scoring
   SUMMARY_FILE             Summary JSON used by chart; defaults to the latest run
   EXAMPLE_REF             Defaults to main; use a SHA to pin upstream configuration
@@ -313,6 +320,7 @@ preflight() {
     *) die "OBSERVABILITY_PROFILE must be full, metrics, or none" ;;
   esac
   [[ "${EVAL_LIMIT}" =~ ^[0-9]+$ ]] || die "EVAL_LIMIT must be an integer"
+  [[ -z "${EVAL_MANIFEST}" || -f "${EVAL_MANIFEST}" ]] || die "EVAL_MANIFEST does not exist: ${EVAL_MANIFEST}"
   [[ "${SMOKE_LIMIT}" =~ ^[0-9]+$ ]] || die "SMOKE_LIMIT must be an integer"
   [[ "${VERIFY_TIMEOUT_SEC}" =~ ^[1-9][0-9]*$ ]] || die "VERIFY_TIMEOUT_SEC must be positive"
   [[ "${VSR_READY_TIMEOUT_SEC}" =~ ^[1-9][0-9]*$ ]] || die "VSR_READY_TIMEOUT_SEC must be positive"
@@ -1180,7 +1188,9 @@ write_metadata() {
   VSR_VERSION="${VSR_CHART_VERSION}" \
   VSR_IMAGE="${VSR_IMAGE_TAG}" \
   OBS_PROFILE="${OBSERVABILITY_PROFILE}" \
+  EVAL_MANIFEST="${EVAL_MANIFEST}" \
   python3 - <<'PY'
+import hashlib
 import json
 import os
 from datetime import datetime, timezone
@@ -1199,6 +1209,13 @@ metadata = {
     "requests": len(rows),
     "selected_models": sorted({row.get("selected_model", "") for row in rows if row.get("selected_model")}),
 }
+manifest_path = os.environ["EVAL_MANIFEST"]
+if manifest_path:
+    with open(manifest_path, "rb") as stream:
+        metadata["selection_manifest"] = {
+            "path": manifest_path,
+            "sha256": hashlib.file_digest(stream, "sha256").hexdigest(),
+        }
 path = os.path.join(os.path.dirname(os.environ["RESULT_FILE"]), os.environ["RUN_ID"] + "-metadata.json")
 with open(path, "w", encoding="utf-8") as stream:
     json.dump(metadata, stream, indent=2)
@@ -1208,10 +1225,13 @@ PY
 }
 
 run_eval_file() {
-  local run_id="$1" output="$2" limit="$3"
-  local capture_args=()
+  local run_id="$1" output="$2" limit="$3" selection_manifest="${4:-}"
+  local capture_args=() manifest_args=()
   if [[ "${CAPTURE_OUTPUT}" == "true" ]]; then
     capture_args+=(--capture-output)
+  fi
+  if [[ -n "${selection_manifest}" ]]; then
+    manifest_args+=(--selection-manifest "${selection_manifest}")
   fi
   python3 "${ROOT_DIR}/scripts/run_eval.py" \
     --gateway-url "$(gateway_url)" \
@@ -1221,6 +1241,7 @@ run_eval_file() {
     --output "${output}" \
     --limit "${limit}" \
     --delay-sec "${EVAL_DELAY_SEC}" \
+    "${manifest_args[@]}" \
     "${capture_args[@]}"
   python3 "${ROOT_DIR}/scripts/validate_results.py" "${output}"
 }
@@ -1247,7 +1268,7 @@ cmd_eval() {
     eval_turns="all 200 corpus"
   fi
   log "Running ${eval_turns} turns through routed, always_low_cost, and always_expensive"
-  run_eval_file "${run_id}" "${result_file}" "${EVAL_LIMIT}"
+  run_eval_file "${run_id}" "${result_file}" "${EVAL_LIMIT}" "${EVAL_MANIFEST}"
   printf '%s\n' "${result_file}" > "${RESULTS_DIR}/latest-result"
   write_metadata "${run_id}" "${result_file}"
 

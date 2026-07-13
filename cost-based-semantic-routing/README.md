@@ -179,11 +179,13 @@ For a smaller evaluation:
 EVAL_LIMIT=50 ./demo.sh eval --yes
 ```
 
-A nonzero `EVAL_LIMIT` selects a deterministic, model-balanced subset instead
-of the first turns in the file. This 50-turn run contains 25 expected
-lower-cost and 25 expected expensive selections, sends 150 corpus requests,
-and still includes every conversation turn. The separate two-turn smoke test
-sends six additional requests.
+`EVAL_LIMIT=50` uses the checked-in [fixed selection manifest](data/eval-50-manifest.json),
+which contains 25 expected lower-cost and 25 expected expensive selections.
+It sends 150 corpus requests and lets tuning runs compare exactly the same
+prompts, even when corpus labels change. The separate two-turn smoke test sends
+six additional requests. Other nonzero values select a deterministic,
+model-balanced subset. Set `EVAL_MANIFEST=/path/to/manifest.json` to use a
+different fixed set; it must contain the same number of IDs as `EVAL_LIMIT`.
 
 For a lower-resource metrics-only stack:
 
@@ -273,8 +275,9 @@ Redeploy and rerun after editing:
 
 Review false negatives first: advanced prompts sent to the lower-cost model.
 Then inspect false positives, where routine prompts consumed the expensive
-model. A production threshold should optimize for an explicit quality SLO, not
-the highest possible savings percentage.
+model. Keep `EVAL_LIMIT=50` for tuning comparisons so each iteration uses the
+same prompt set. A production threshold should optimize for an explicit quality
+SLO, not the highest possible savings percentage.
 
 `./demo.sh refresh` discards local tuning and fetches `EXAMPLE_REF` again.
 

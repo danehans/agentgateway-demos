@@ -115,6 +115,32 @@ def expected_models(path):
     return sorted({item["expected_model"] for item in load_corpus(path)})
 
 
+def manifest_subset(items, path):
+    """Select an ordered, fixed evaluation set from a checked-in manifest."""
+    path = Path(path)
+    try:
+        with path.open(encoding="utf-8") as stream:
+            manifest = json.load(stream)
+    except OSError as error:
+        raise ValueError(f"cannot read selection manifest {path}: {error}") from error
+    except json.JSONDecodeError as error:
+        raise ValueError(f"{path}: invalid JSON: {error}") from error
+
+    ids = manifest.get("ids") if isinstance(manifest, dict) else None
+    if not isinstance(ids, list) or not ids:
+        raise ValueError(f"{path}: ids must be a non-empty list")
+    if any(not isinstance(item_id, str) or not item_id.strip() for item_id in ids):
+        raise ValueError(f"{path}: every id must be a non-empty string")
+    if len(ids) != len(set(ids)):
+        raise ValueError(f"{path}: ids must be unique")
+
+    items_by_id = {item["id"]: item for item in items}
+    missing = [item_id for item_id in ids if item_id not in items_by_id]
+    if missing:
+        raise ValueError(f"{path}: ids not found in corpus: {', '.join(missing)}")
+    return [items_by_id[item_id] for item_id in ids]
+
+
 def balanced_subset(items, limit, seed=7):
     """Select a deterministic, model-balanced subset without changing the corpus."""
     if limit < 0:

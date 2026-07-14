@@ -131,14 +131,15 @@ The chart and summary make the trade-off visible. Increasing escalation to
 spend; lowering it does the opposite. The goal is a reasonable balance, not
 100% agreement with a small checked-in dataset.
 
-The vSR chart and ExtProc image are pinned to `0.3.0` and `v0.3.0` for a
-consistent run. Override both together when validating a newer release:
+The vSR chart and ExtProc image default to the rolling `0.0.0-latest` and
+`latest` tags. Override both together with fixed versions when reproducing a
+historical run:
 
 ```bash
-VSR_CHART_VERSION=0.3.0 VSR_IMAGE_TAG=v0.3.0 ./demo.sh setup
+VSR_CHART_VERSION=<chart-version> VSR_IMAGE_TAG=<image-tag> ./demo.sh setup
 ```
 
-For a reproducible run after the upstream example has merged, pin a commit:
+To lock a known upstream configuration revision, pin a commit:
 
 ```bash
 EXAMPLE_REF=<agentgateway-commit-sha> ./demo.sh refresh --yes

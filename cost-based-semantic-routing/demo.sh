@@ -280,8 +280,8 @@ Important environment variables:
   SUMMARY_FILE             Summary JSON used by chart; defaults to the latest run
   EXAMPLE_REF             Defaults to main; use a SHA to pin upstream configuration
   EXAMPLE_REPO_URL        Defaults to the public agentgateway repository
-  VSR_CHART_VERSION       Defaults to the 0.3.0 release chart
-  VSR_IMAGE_TAG           Defaults to the v0.3.0 extproc image
+  VSR_CHART_VERSION       Defaults to the 0.0.0-latest chart
+  VSR_IMAGE_TAG           Defaults to the latest extproc image
   VERIFY_TIMEOUT_SEC      Component and endpoint timeout; defaults to 300
   VSR_READY_TIMEOUT_SEC   Router/model startup timeout; defaults to 1200
   SIGNAL_TIMEOUT_SEC      Metrics, logs, and traces timeout; defaults to 180
@@ -1061,7 +1061,7 @@ deploy_router() {
     --namespace "${NAMESPACE}" \
     --values "${EXAMPLE_DIR}/k8s/semantic-router-values.yaml" \
     --set-string "image.tag=${VSR_IMAGE_TAG}" \
-    --set-string image.pullPolicy=IfNotPresent \
+    --set-string image.pullPolicy=Always \
     --reset-values \
     "${helm_args[@]}" \
     --wait --timeout "${VSR_READY_TIMEOUT_SEC}s"

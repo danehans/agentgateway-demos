@@ -334,6 +334,52 @@ class EvaluationToolingTest(unittest.TestCase):
             "gpt-cheap",
         )
 
+    def test_evaluator_prices_cache_read_and_write_tokens(self):
+        catalog = {
+            "providers": {"openai": {"models": {
+                "gpt-cheap": {"rates": {
+                    "input": "1", "cacheRead": "0.5", "cacheWrite": "1.25", "output": "2",
+                }},
+            }}}
+        }
+        usage = {
+            "input_tokens": 100,
+            "cached_input_tokens": 20,
+            "cache_write_tokens": 30,
+            "output_tokens": 10,
+        }
+
+        components = run_eval.estimate_cost_components(
+            catalog, "gpt-cheap", "gpt-cheap", usage
+        )
+
+        self.assertAlmostEqual(components["uncached_input"], 0.00005)
+        self.assertAlmostEqual(components["cache_read"], 0.00001)
+        self.assertAlmostEqual(components["cache_write"], 0.0000375)
+        self.assertAlmostEqual(components["output"], 0.00002)
+
+    def test_sequential_jobs_preserve_conversation_turn_order(self):
+        items = [
+            {"id": "b-2", "conversation_id": "b", "turn": 2},
+            {"id": "a-1", "conversation_id": "a", "turn": 1},
+            {"id": "b-1", "conversation_id": "b", "turn": 1},
+            {"id": "a-2", "conversation_id": "a", "turn": 2},
+        ]
+
+        jobs = run_eval.evaluation_jobs(
+            items, ["routed", "always_expensive"], True, seed=7
+        )
+
+        self.assertEqual(
+            [(item["id"], lane) for item, lane in jobs],
+            [
+                ("b-1", "routed"), ("b-2", "routed"),
+                ("a-1", "routed"), ("a-2", "routed"),
+                ("b-1", "always_expensive"), ("b-2", "always_expensive"),
+                ("a-1", "always_expensive"), ("a-2", "always_expensive"),
+            ],
+        )
+
     def test_default_dataset_has_expected_model_mix(self):
         dataset_path = DEMO_DIR / "data" / "demo-dataset.jsonl"
         rows = dataset.load_dataset(dataset_path)
@@ -398,6 +444,23 @@ class EvaluationToolingTest(unittest.TestCase):
             summary["savings"]["counterfactual_on_routed_tokens"]["always_expensive_cost_usd"],
             0.0006,
         )
+
+    def test_summary_groups_cache_transitions(self):
+        rows = [
+            {
+                "lane": "routed", "ok": True,
+                "previous_selected_model": "gpt-cheap",
+                "selected_model": "gpt-expensive-2026-07-01",
+                "usage": {"input_tokens": 100, "cached_input_tokens": 20, "cache_write_tokens": 0},
+                "cost_components_usd": {"uncached_input": 0.0004, "cache_read": 0.00005},
+            },
+        ]
+
+        transitions = summarize_results.cache_transition_summary(rows, self.catalog)
+
+        self.assertEqual(transitions[0]["transition"], "gpt-cheap->gpt-expensive")
+        self.assertTrue(transitions[0]["model_switch"])
+        self.assertEqual(transitions[0]["cached_input_tokens"], 20)
 
 class VerifyObservabilityTest(unittest.TestCase):
     def test_extracts_prometheus_values(self):

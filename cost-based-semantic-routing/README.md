@@ -21,7 +21,7 @@ answers four questions:
 ```mermaid
 flowchart LR
     A[Application or coding agent] -->|model: auto| G[agentgateway]
-    G -->|Buffered ExtProc| S[vSR semantic policy]
+    G -->|ExtProc| S[vSR semantic policy]
     S -->|routine coding| L[gpt-5.4-nano]
     S -->|complex coding| H[gpt-5.5]
     L --> G
@@ -60,8 +60,8 @@ and uses the `agentgateway-system` and `telemetry` namespaces. Before its
 primary evaluation, it installs MetalLB, agentgateway, the model cost catalog,
 vSR, and the OpenTelemetry stack. It verifies component rollouts, storage,
 services, port-forwards, HTTP and gRPC readiness endpoints, the model catalog,
-the Gateway listener, buffered ExtProc routing, and catalog-priced metrics,
-logs, and traces.
+the Gateway listener, ExtProc routing, and catalog-priced metrics, logs, and
+traces.
 
 Each check retries for a bounded period and exits with a diagnostic if it cannot
 become healthy. `setup` makes no OpenAI requests. `all` sends 54 small billable
@@ -131,6 +131,36 @@ The chart and summary make the trade-off visible. Increasing escalation to
 spend; lowering it does the opposite. The goal is a reasonable balance, not
 100% agreement with a small checked-in dataset.
 
+## Measure Cache Transitions
+
+The default dataset is a small, independent-request evaluation. It does not
+claim to measure a coding agent's prompt-cache behavior. To measure cache
+effects in a multi-turn dataset, preserve each conversation's turn order and
+provide a unique, stable cache-key prefix:
+
+```bash
+EVAL_DATASET=/path/to/multi-turn-dataset.jsonl \
+EVAL_SEQUENTIAL_CONVERSATIONS=true \
+EVAL_PROMPT_CACHE_KEY_PREFIX="cache-benchmark-$(date -u +%Y%m%dT%H%M%SZ)" \
+./demo.sh eval --yes
+```
+
+The runner uses a separate `prompt_cache_key` for each evaluation lane and
+conversation. It records the prior selected model, model-switch flag, cached
+input tokens, cache-write tokens, and input/output cost components. The
+summary's `Conversation cache transitions` section groups those values by
+actual transition, such as `gpt-5.4-nano->gpt-5.5`.
+
+Use a dataset with complete conversation history and a long, identical leading
+prefix on successive turns. A cache key does not create a cache hit; only the
+upstream provider's returned cached-token usage establishes whether the prefix
+was reused.
+
+Prompt caching is controlled and reported by the upstream model provider.
+Agentgateway and vSR do not copy a conversation prefix or migrate a provider
+cache between models. Treat a model crossing as a potential cache miss unless
+the provider reports cached input tokens for that request.
+
 The vSR chart and ExtProc image default to the rolling `0.0.0-latest` and
 `latest` tags. Override both together with fixed versions when reproducing a
 historical run:
@@ -149,7 +179,7 @@ EXAMPLE_REF=<agentgateway-commit-sha> ./demo.sh refresh --yes
 
 ```bash
 ./demo.sh setup       # Install the cluster components without model traffic
-./demo.sh verify      # Verify buffered ExtProc selects both model tiers
+./demo.sh verify      # Verify full-duplex ExtProc selects both model tiers
 ./demo.sh eval        # Run the smoke test and two-lane evaluation
 ./demo.sh report      # Regenerate the summaries from the latest result
 ./demo.sh chart       # Render the latest SVG chart

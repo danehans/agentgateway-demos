@@ -134,12 +134,11 @@ spend; lowering it does the opposite. The goal is a reasonable balance, not
 ## Measure Cache Transitions
 
 The default dataset is a small, independent-request evaluation. It does not
-claim to measure a coding agent's prompt-cache behavior. To measure cache
-effects in a multi-turn dataset, preserve each conversation's turn order and
+claim to measure a coding agent's prompt-cache behavior. Set sequential mode to
+use the checked-in long-session Go and Rust dataset, preserve turn order, and
 provide a unique, stable cache-key prefix:
 
 ```bash
-EVAL_DATASET=/path/to/multi-turn-dataset.jsonl \
 EVAL_SEQUENTIAL_CONVERSATIONS=true \
 EVAL_PROMPT_CACHE_KEY_PREFIX="cache-benchmark-$(date -u +%Y%m%dT%H%M%SZ)" \
 ./demo.sh eval --yes
@@ -155,6 +154,12 @@ Use a dataset with complete conversation history and a long, identical leading
 prefix on successive turns. A cache key does not create a cache hit; only the
 upstream provider's returned cached-token usage establishes whether the prefix
 was reused.
+
+The checked-in cache-transition dataset has two four-turn conversations. Its
+fixed project-context first turn and retained assistant history make later
+prefix reuse observable when the upstream provider supports it. Override
+`EVAL_DATASET` with representative application transcripts to measure your own
+agent traffic.
 
 Prompt caching is controlled and reported by the upstream model provider.
 Agentgateway and vSR do not copy a conversation prefix or migrate a provider
@@ -179,7 +184,7 @@ EXAMPLE_REF=<agentgateway-commit-sha> ./demo.sh refresh --yes
 
 ```bash
 ./demo.sh setup       # Install the cluster components without model traffic
-./demo.sh verify      # Verify full-duplex ExtProc selects both model tiers
+./demo.sh verify      # Verify ExtProc selects both model tiers
 ./demo.sh eval        # Run the smoke test and two-lane evaluation
 ./demo.sh report      # Regenerate the summaries from the latest result
 ./demo.sh chart       # Render the latest SVG chart

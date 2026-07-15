@@ -403,6 +403,21 @@ class EvaluationToolingTest(unittest.TestCase):
             self.assertEqual(row["messages"][-1]["role"], "user")
             self.assertEqual(len(row["messages"]), 1)
 
+    def test_cache_transition_dataset_has_long_ordered_conversations(self):
+        dataset_path = DEMO_DIR / "data" / "cache-transition-dataset.jsonl"
+        rows = dataset.load_dataset(dataset_path)
+
+        self.assertEqual(len(rows), 8)
+        self.assertEqual(
+            {row["conversation_id"] for row in rows},
+            {"go-deployment-session", "rust-replication-session"},
+        )
+        for conversation_id in {row["conversation_id"] for row in rows}:
+            turns = [row for row in rows if row["conversation_id"] == conversation_id]
+            self.assertEqual([row["turn"] for row in turns], [1, 2, 3, 4])
+            self.assertGreater(len(turns[0]["messages"][0]["content"]), 1800)
+            self.assertGreater(len(turns[-1]["messages"]), len(turns[0]["messages"]))
+
     def test_evaluator_preserves_dataset_history(self):
         item = {
             "id": "conversation-turn-2",

@@ -24,12 +24,17 @@ if [[ -z "${OBSERVABILITY_PROFILE:-}" && -f "${WORK_DIR}/observability-profile" 
   OBSERVABILITY_PROFILE="$(cat "${WORK_DIR}/observability-profile")"
 fi
 OBSERVABILITY_PROFILE="${OBSERVABILITY_PROFILE:-full}"
-EVAL_DATASET="${EVAL_DATASET:-${ROOT_DIR}/data/demo-dataset.jsonl}"
 EVAL_LIMIT="${EVAL_LIMIT:-0}"
 EVAL_LANES="routed,always_expensive"
 EVAL_REASONING_EFFORT="${EVAL_REASONING_EFFORT:-none}"
 EVAL_SEQUENTIAL_CONVERSATIONS="${EVAL_SEQUENTIAL_CONVERSATIONS:-false}"
 EVAL_PROMPT_CACHE_KEY_PREFIX="${EVAL_PROMPT_CACHE_KEY_PREFIX:-}"
+if [[ "${EVAL_SEQUENTIAL_CONVERSATIONS}" == "true" ]]; then
+  DEFAULT_EVAL_DATASET="${ROOT_DIR}/data/cache-transition-dataset.jsonl"
+else
+  DEFAULT_EVAL_DATASET="${ROOT_DIR}/data/demo-dataset.jsonl"
+fi
+EVAL_DATASET="${EVAL_DATASET:-${DEFAULT_EVAL_DATASET}}"
 SMOKE_LIMIT="${SMOKE_LIMIT:-2}"
 EVAL_DELAY_SEC="${EVAL_DELAY_SEC:-1}"
 VERIFY_TIMEOUT_SEC="${VERIFY_TIMEOUT_SEC:-300}"
@@ -1288,7 +1293,7 @@ cmd_eval() {
 
   local eval_turns="${EVAL_LIMIT}"
   if [[ "${EVAL_LIMIT}" == "0" ]]; then
-    eval_turns="all 24 demo"
+    eval_turns="all dataset"
   fi
   log "Running ${eval_turns} prompts through routed and always_expensive"
   run_eval_file "${run_id}" "${result_file}" "${EVAL_LIMIT}"

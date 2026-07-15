@@ -299,7 +299,9 @@ class RenderEvaluationChartTest(unittest.TestCase):
         self.assertIn("CONVERSATION CACHE TRANSITIONS", chart)
         self.assertIn("2 switches", chart)
         self.assertIn("2,000 read", chart)
-        self.assertIn("5.4-nano -&gt; 5.5: 2", chart)
+        self.assertIn("CACHE READS BY TRANSITION", chart)
+        self.assertIn("routed: nano -&gt; 5.5, 1,200 (2)", chart)
+        self.assertIn("routed: 5.5 -&gt; 5.5, 800 (3)", chart)
 
     def test_falls_back_to_local_costs_and_uses_run_chart_name(self):
         summary = {

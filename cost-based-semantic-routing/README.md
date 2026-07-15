@@ -85,7 +85,8 @@ Each run writes these files under `results/`:
   data
 - `<RUN_ID>-chart.svg`: spend, routing agreement, model mix, complex-prompt
   escalation, latency, and, for sequential multi-turn runs, conversation cache
-  transitions and provider-reported cache tokens
+  transitions, provider-reported cache tokens, and cache-read attribution by
+  lane and model transition
 
 The chart uses two lanes only:
 

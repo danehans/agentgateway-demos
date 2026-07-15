@@ -114,11 +114,8 @@ SUMMARY_FILE=results/<RUN_ID>-summary.json ./demo.sh chart
 
 ## Tune the policy
 
-The vSR values come from the selected agentgateway example revision:
-
-```text
-../.work/cost-based-semantic-routing/agentgateway/examples/llm-semantic-routing/k8s/semantic-router-values.yaml
-```
+The vSR values come from the upstream
+[agentgateway semantic-router values](https://github.com/agentgateway/agentgateway/blob/main/examples/llm-semantic-routing/k8s/semantic-router-values.yaml).
 
 Adjust the routing signals, redeploy them, and run the same sample again:
 

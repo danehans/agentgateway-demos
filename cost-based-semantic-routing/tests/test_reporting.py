@@ -435,7 +435,12 @@ class EvaluationToolingTest(unittest.TestCase):
         for conversation_id in {row["conversation_id"] for row in rows}:
             turns = [row for row in rows if row["conversation_id"] == conversation_id]
             self.assertEqual([row["turn"] for row in turns], [1, 2, 3, 4])
-            self.assertGreater(len(turns[0]["messages"][0]["content"]), 1800)
+            prefix = turns[0]["messages"][0]
+            self.assertEqual(prefix["role"], "user")
+            self.assertGreater(len(prefix["content"]), 7000)
+            for turn in turns:
+                self.assertEqual(turn["messages"][0], prefix)
+                self.assertEqual(turn["messages"][1]["role"], "assistant")
             self.assertGreater(len(turns[-1]["messages"]), len(turns[0]["messages"]))
 
     def test_evaluator_preserves_dataset_history(self):

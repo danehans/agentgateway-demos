@@ -156,11 +156,11 @@ prefix on successive turns. A cache key does not create a cache hit; only the
 upstream provider's returned cached-token usage establishes whether the prefix
 was reused.
 
-The checked-in cache-transition dataset has two four-turn conversations. Its
-fixed project-context first turn and retained assistant history make later
-prefix reuse observable when the upstream provider supports it. Override
-`EVAL_DATASET` with representative application transcripts to measure your own
-agent traffic.
+The checked-in cache-transition dataset has two four-turn conversations. Each
+has a stable project-reference prefix of more than 7,000 characters that the
+loader retains byte-for-byte before every turn, making later prefix reuse
+observable when the upstream provider supports it. Override `EVAL_DATASET` with
+representative application transcripts to measure your own agent traffic.
 
 Prompt caching is controlled and reported by the upstream model provider.
 Agentgateway and vSR do not copy a conversation prefix or migrate a provider

@@ -262,14 +262,12 @@ class RenderEvaluationChartTest(unittest.TestCase):
                         "model_switch": True,
                         "requests": 2,
                         "cached_input_tokens": 1200,
-                        "cache_write_tokens": 400,
                     },
                     {
                         "transition": "gpt-5.5->gpt-5.5",
                         "model_switch": False,
                         "requests": 3,
                         "cached_input_tokens": 800,
-                        "cache_write_tokens": 0,
                     },
                 ],
             },
@@ -298,7 +296,7 @@ class RenderEvaluationChartTest(unittest.TestCase):
         self.assertIn("Catalog-priced agentgateway metrics", chart)
         self.assertIn("CONVERSATION CACHE TRANSITIONS", chart)
         self.assertIn("2 switches", chart)
-        self.assertIn("2,000 read", chart)
+        self.assertIn("2,000 tokens", chart)
         self.assertIn("CACHE READS BY TRANSITION", chart)
         self.assertIn("routed: nano -&gt; 5.5, 1,200 (2)", chart)
         self.assertIn("routed: 5.5 -&gt; 5.5, 800 (3)", chart)
@@ -356,18 +354,17 @@ class EvaluationToolingTest(unittest.TestCase):
             "gpt-cheap",
         )
 
-    def test_evaluator_prices_cache_read_and_write_tokens(self):
+    def test_evaluator_prices_cache_read_tokens(self):
         catalog = {
             "providers": {"openai": {"models": {
                 "gpt-cheap": {"rates": {
-                    "input": "1", "cacheRead": "0.5", "cacheWrite": "1.25", "output": "2",
+                    "input": "1", "cacheRead": "0.5", "output": "2",
                 }},
             }}}
         }
         usage = {
             "input_tokens": 100,
             "cached_input_tokens": 20,
-            "cache_write_tokens": 30,
             "output_tokens": 10,
         }
 
@@ -375,9 +372,8 @@ class EvaluationToolingTest(unittest.TestCase):
             catalog, "gpt-cheap", "gpt-cheap", usage
         )
 
-        self.assertAlmostEqual(components["uncached_input"], 0.00005)
+        self.assertAlmostEqual(components["uncached_input"], 0.00008)
         self.assertAlmostEqual(components["cache_read"], 0.00001)
-        self.assertAlmostEqual(components["cache_write"], 0.0000375)
         self.assertAlmostEqual(components["output"], 0.00002)
 
     def test_sequential_jobs_preserve_conversation_turn_order(self):
@@ -493,7 +489,7 @@ class EvaluationToolingTest(unittest.TestCase):
                 "lane": "routed", "ok": True,
                 "previous_selected_model": "gpt-cheap",
                 "selected_model": "gpt-expensive-2026-07-01",
-                "usage": {"input_tokens": 100, "cached_input_tokens": 20, "cache_write_tokens": 0},
+                "usage": {"input_tokens": 100, "cached_input_tokens": 20},
                 "cost_components_usd": {"uncached_input": 0.0004, "cache_read": 0.00005},
             },
         ]

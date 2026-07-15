@@ -109,18 +109,13 @@ def effective_rates(model, input_tokens):
 def estimate_cost_components(catalog, request_model, response_model, usage):
     input_tokens = float(usage.get("input_tokens", 0) or 0)
     cached_tokens = min(float(usage.get("cached_input_tokens", 0) or 0), input_tokens)
-    remaining_input = max(input_tokens - cached_tokens, 0)
-    cache_write_tokens = min(
-        float(usage.get("cache_write_tokens", 0) or 0), remaining_input
-    )
-    uncached_tokens = max(remaining_input - cache_write_tokens, 0)
+    uncached_tokens = max(input_tokens - cached_tokens, 0)
     output_tokens = float(usage.get("output_tokens", 0) or 0)
     _, model = catalog_model(catalog, request_model, response_model)
     rates = effective_rates(model, input_tokens)
     return {
         "uncached_input": uncached_tokens * rates.get("input", 0.0) / 1_000_000,
         "cache_read": cached_tokens * rates.get("cacheRead", 0.0) / 1_000_000,
-        "cache_write": cache_write_tokens * rates.get("cacheWrite", 0.0) / 1_000_000,
         "output": output_tokens * rates.get("output", 0.0) / 1_000_000,
     }
 
@@ -179,9 +174,6 @@ def usage(body):
     return {
         "input_tokens": raw.get("prompt_tokens", raw.get("input_tokens", 0)) or 0,
         "cached_input_tokens": details.get("cached_tokens", raw.get("cached_input_tokens", 0)) or 0,
-        "cache_write_tokens": details.get(
-            "cache_write_tokens", raw.get("cache_write_tokens", 0)
-        ) or 0,
         "output_tokens": raw.get("completion_tokens", raw.get("output_tokens", 0)) or 0,
         "total_tokens": raw.get("total_tokens", 0) or 0,
         "raw": raw,

@@ -45,7 +45,6 @@ def lane_summary(rows):
             "ok": len(ok_rows),
             "input_tokens": sum(item.get("input_tokens", 0) or 0 for item in usage),
             "cached_input_tokens": sum(item.get("cached_input_tokens", 0) or 0 for item in usage),
-            "cache_write_tokens": sum(item.get("cache_write_tokens", 0) or 0 for item in usage),
             "output_tokens": sum(item.get("output_tokens", 0) or 0 for item in usage),
             "cost_estimate_usd": sum(row.get("cost_estimate_usd", 0) or 0 for row in ok_rows),
             "cost_components_usd": dict(cost_components),
@@ -61,7 +60,6 @@ def cache_transition_summary(rows, catalog):
     transitions = defaultdict(lambda: {
         "requests": 0,
         "cached_input_tokens": 0,
-        "cache_write_tokens": 0,
         "input_tokens": 0,
         "cost_components_usd": defaultdict(float),
     })
@@ -76,7 +74,6 @@ def cache_transition_summary(rows, catalog):
         values["requests"] += 1
         values["input_tokens"] += usage.get("input_tokens", 0) or 0
         values["cached_input_tokens"] += usage.get("cached_input_tokens", 0) or 0
-        values["cache_write_tokens"] += usage.get("cache_write_tokens", 0) or 0
         for name, value in row.get("cost_components_usd", {}).items():
             values["cost_components_usd"][name] += value or 0
     return [
@@ -87,7 +84,6 @@ def cache_transition_summary(rows, catalog):
             "requests": values["requests"],
             "input_tokens": values["input_tokens"],
             "cached_input_tokens": values["cached_input_tokens"],
-            "cache_write_tokens": values["cache_write_tokens"],
             "cost_components_usd": dict(values["cost_components_usd"]),
         }
         for (lane, transition), values in sorted(transitions.items())
@@ -186,9 +182,9 @@ def build_summary(rows, catalog, expensive_model):
 
 
 def render_summary(summary):
-    lines = ["Lane summary", "lane,requests,ok,input_tokens,cached_input_tokens,cache_write_tokens,output_tokens,cost_estimate,p50_ms,p95_ms"]
+    lines = ["Lane summary", "lane,requests,ok,input_tokens,cached_input_tokens,output_tokens,cost_estimate,p50_ms,p95_ms"]
     for lane, values in summary["lanes"].items():
-        lines.append(f"{lane},{values['requests']},{values['ok']},{values['input_tokens']},{values['cached_input_tokens']},{values['cache_write_tokens']},{values['output_tokens']},${values['cost_estimate_usd']:.6f},{values['latency_ms']['p50']:.1f},{values['latency_ms']['p95']:.1f}")
+        lines.append(f"{lane},{values['requests']},{values['ok']},{values['input_tokens']},{values['cached_input_tokens']},{values['output_tokens']},${values['cost_estimate_usd']:.6f},{values['latency_ms']['p50']:.1f},{values['latency_ms']['p95']:.1f}")
     routing = summary["routing"]
     if routing:
         lines.extend(["", f"Dataset-label selection agreement (diagnostic): {routing['correct']}/{routing['total']} = {routing['accuracy']:.1%}", "expected_model,selected_model,count"])
@@ -201,13 +197,13 @@ def render_summary(summary):
                 f"= {escalation['fraction']:.1%}"
             )
     if summary["cache_transitions"]:
-        lines.extend(["", "Conversation cache transitions", "lane,transition,model_switch,requests,input_tokens,cached_input_tokens,cache_write_tokens,cost_estimate"])
+        lines.extend(["", "Conversation cache transitions", "lane,transition,model_switch,requests,input_tokens,cached_input_tokens,cost_estimate"])
         for item in summary["cache_transitions"]:
             cost = sum(item["cost_components_usd"].values())
             lines.append(
                 f"{item['lane']},{item['transition']},{str(item['model_switch']).lower()},"
                 f"{item['requests']},{item['input_tokens']},{item['cached_input_tokens']},"
-                f"{item['cache_write_tokens']},${cost:.6f}"
+                f"${cost:.6f}"
             )
     for label, values in (("Counterfactual savings on routed token counts", summary["savings"]["counterfactual_on_routed_tokens"]), ("Actual lane savings", summary["savings"]["actual_lanes"])):
         if values:

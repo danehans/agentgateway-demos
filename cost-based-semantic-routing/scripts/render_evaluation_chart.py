@@ -103,13 +103,11 @@ def cache_transition_data(summary):
     switches = [item for item in transitions if item.get("model_switch")]
     switch_count = sum(int(item.get("requests", 0)) for item in switches)
     cached_tokens = sum(int(item.get("cached_input_tokens", 0)) for item in transitions)
-    cache_write_tokens = sum(int(item.get("cache_write_tokens", 0)) for item in transitions)
     if not transitions:
         return {
             "total": 0,
             "switches": 0,
             "cached_tokens": 0,
-            "cache_write_tokens": 0,
             "cache_read_lines": ["No ordered multi-turn transitions in this run"],
         }
     cache_reads = []
@@ -130,7 +128,6 @@ def cache_transition_data(summary):
         "total": total,
         "switches": switch_count,
         "cached_tokens": cached_tokens,
-        "cache_write_tokens": cache_write_tokens,
         "cache_read_lines": [item[1] for item in cache_reads]
         or ["No provider cache reads observed"],
     }
@@ -230,9 +227,8 @@ def render_chart(summary):
   <text class="metric-detail" x="48" y="607">{cache_transitions['total']} ordered continuation turns</text>
 
   <line x1="337" y1="541" x2="337" y2="{cache_section_bottom + 6}" stroke="#cbd5e1"/>
-  <text class="section" x="370" y="550">PROVIDER CACHE TOKENS</text>
-  <text class="metric" x="370" y="584">{cache_transitions['cached_tokens']:,} read</text>
-  <text class="metric-detail" x="370" y="607">{cache_transitions['cache_write_tokens']:,} write</text>
+  <text class="section" x="370" y="550">PROVIDER CACHE READS</text>
+  <text class="metric" x="370" y="584">{cache_transitions['cached_tokens']:,} tokens</text>
 
   <line x1="655" y1="541" x2="655" y2="{cache_section_bottom + 6}" stroke="#cbd5e1"/>
   <text class="section" x="673" y="550">CACHE READS BY TRANSITION</text>

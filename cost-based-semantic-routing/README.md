@@ -145,9 +145,12 @@ EVAL_PROMPT_CACHE_KEY_PREFIX="cache-benchmark-$(date -u +%Y%m%dT%H%M%SZ)" \
 
 The runner uses a separate `prompt_cache_key` for each evaluation lane and
 conversation. It records the prior selected model, model-switch flag, cached
-input tokens, cache-write tokens, and input/output cost components. The
-summary's `Conversation cache transitions` section groups those values by
-actual transition, such as `gpt-5.4-nano->gpt-5.5`.
+input tokens, and input/output cost components. The summary's `Conversation
+cache transitions` section groups those values by actual transition, such as
+`gpt-5.4-nano->gpt-5.5`.
+
+The current GPT-5.4 Nano and GPT-5.5 demo reports cache reads only. Cache-write
+accounting will be added when the demo supports GPT-5.6 models.
 
 Use a dataset with complete conversation history and a long, identical leading
 prefix on successive turns. A cache key does not create a cache hit; only the

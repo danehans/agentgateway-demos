@@ -99,15 +99,12 @@ def effective_rates(model, input_tokens):
 def price_tokens(catalog, request_model, response_model, tokens):
     input_tokens = tokens.get("input", 0.0)
     cache_read = min(tokens.get("input_cache_read", 0.0), input_tokens)
-    remaining_input = max(input_tokens - cache_read, 0.0)
-    cache_write = min(tokens.get("input_cache_write", 0.0), remaining_input)
-    uncached_input = max(remaining_input - cache_write, 0.0)
+    uncached_input = max(input_tokens - cache_read, 0.0)
     catalog_model, model = find_model(catalog, request_model, response_model)
     rates = effective_rates(model, input_tokens)
     cost_components = {
         "uncached_input": uncached_input * rates.get("input", 0.0) / 1_000_000,
         "cache_read": cache_read * rates.get("cacheRead", 0.0) / 1_000_000,
-        "cache_write": cache_write * rates.get("cacheWrite", 0.0) / 1_000_000,
         "output": tokens.get("output", 0.0) * rates.get("output", 0.0) / 1_000_000,
     }
     return catalog_model, sum(cost_components.values()), cost_components
@@ -122,7 +119,9 @@ def calculate_costs(rows, catalog):
             labels.get("gen_ai_request_model", ""),
             labels.get("gen_ai_response_model", ""),
         )
-        grouped[key][labels.get("gen_ai_token_type", "unknown")] += prom_value(row)
+        token_type = labels.get("gen_ai_token_type", "unknown")
+        if token_type in {"input", "input_cache_read", "output"}:
+            grouped[key][token_type] += prom_value(row)
 
     lane_costs = []
     model_costs = defaultdict(float)
@@ -269,11 +268,9 @@ def render_report(report):
             "  " + labels + ": "
             f"input={tokens.get('input', 0):g}, "
             f"cache_read={tokens.get('input_cache_read', 0):g}, "
-            f"cache_write={tokens.get('input_cache_write', 0):g}, "
             f"output={tokens.get('output', 0):g}; "
             f"uncached_input=${components.get('uncached_input', 0):.8f}, "
             f"cache_read=${components.get('cache_read', 0):.8f}, "
-            f"cache_write=${components.get('cache_write', 0):.8f}, "
             f"output=${components.get('output', 0):.8f}"
         )
     lines.extend(render_vector(

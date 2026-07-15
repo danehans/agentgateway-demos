@@ -256,6 +256,22 @@ class RenderEvaluationChartTest(unittest.TestCase):
                         {"model": "gpt-5.5", "requests": 8, "fraction": 0.4},
                     ],
                 },
+                "cache_transitions": [
+                    {
+                        "transition": "gpt-5.4-nano->gpt-5.5",
+                        "model_switch": True,
+                        "requests": 2,
+                        "cached_input_tokens": 1200,
+                        "cache_write_tokens": 400,
+                    },
+                    {
+                        "transition": "gpt-5.5->gpt-5.5",
+                        "model_switch": False,
+                        "requests": 3,
+                        "cached_input_tokens": 800,
+                        "cache_write_tokens": 0,
+                    },
+                ],
             },
             "prometheus": {
                 "status": "collected",
@@ -280,6 +296,10 @@ class RenderEvaluationChartTest(unittest.TestCase):
         self.assertIn("12 gpt-5.4-nano | 8 gpt-5.5", chart)
         self.assertIn("2.50 s p50", chart)
         self.assertIn("Catalog-priced agentgateway metrics", chart)
+        self.assertIn("CONVERSATION CACHE TRANSITIONS", chart)
+        self.assertIn("2 switches", chart)
+        self.assertIn("2,000 read", chart)
+        self.assertIn("5.4-nano -&gt; 5.5: 2", chart)
 
     def test_falls_back_to_local_costs_and_uses_run_chart_name(self):
         summary = {

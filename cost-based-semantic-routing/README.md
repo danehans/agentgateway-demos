@@ -84,7 +84,8 @@ Each run writes these files under `results/`:
 - `<RUN_ID>-summary.json` and `.txt`: local and evaluation-scoped Prometheus
   data
 - `<RUN_ID>-chart.svg`: spend, routing agreement, model mix, complex-prompt
-  escalation, and latency
+  escalation, latency, and, for sequential multi-turn runs, conversation cache
+  transitions and provider-reported cache tokens
 
 The chart uses two lanes only:
 

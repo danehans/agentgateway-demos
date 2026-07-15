@@ -62,7 +62,22 @@ def _conversation_items(conversation, path, line_number):
     turns = conversation.get("turns")
     if not isinstance(turns, list) or not turns:
         _fail(path, line_number, "turns must be a non-empty list")
-    history = []
+    cache_prefix = conversation.get("cache_prefix", "")
+    if cache_prefix:
+        history = [
+            {
+                "role": "user",
+                "content": _text(
+                    cache_prefix, path, line_number, "conversation cache_prefix"
+                ),
+            },
+            {
+                "role": "assistant",
+                "content": "I will use this project reference for every later request.",
+            },
+        ]
+    else:
+        history = []
     return [
         _turn_item(conversation, turn, index, history, path, line_number)
         for index, turn in enumerate(turns, 1)

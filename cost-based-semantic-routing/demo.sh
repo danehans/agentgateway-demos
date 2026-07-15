@@ -24,10 +24,17 @@ if [[ -z "${OBSERVABILITY_PROFILE:-}" && -f "${WORK_DIR}/observability-profile" 
   OBSERVABILITY_PROFILE="$(cat "${WORK_DIR}/observability-profile")"
 fi
 OBSERVABILITY_PROFILE="${OBSERVABILITY_PROFILE:-full}"
-EVAL_DATASET="${EVAL_DATASET:-${ROOT_DIR}/data/demo-dataset.jsonl}"
 EVAL_LIMIT="${EVAL_LIMIT:-0}"
 EVAL_LANES="routed,always_expensive"
 EVAL_REASONING_EFFORT="${EVAL_REASONING_EFFORT:-none}"
+EVAL_SEQUENTIAL_CONVERSATIONS="${EVAL_SEQUENTIAL_CONVERSATIONS:-false}"
+EVAL_PROMPT_CACHE_KEY_PREFIX="${EVAL_PROMPT_CACHE_KEY_PREFIX:-}"
+if [[ "${EVAL_SEQUENTIAL_CONVERSATIONS}" == "true" ]]; then
+  DEFAULT_EVAL_DATASET="${ROOT_DIR}/data/cache-transition-dataset.jsonl"
+else
+  DEFAULT_EVAL_DATASET="${ROOT_DIR}/data/demo-dataset.jsonl"
+fi
+EVAL_DATASET="${EVAL_DATASET:-${DEFAULT_EVAL_DATASET}}"
 SMOKE_LIMIT="${SMOKE_LIMIT:-2}"
 EVAL_DELAY_SEC="${EVAL_DELAY_SEC:-1}"
 VERIFY_TIMEOUT_SEC="${VERIFY_TIMEOUT_SEC:-300}"
@@ -254,9 +261,9 @@ usage() {
 Usage: ./demo.sh COMMAND [--yes]
 
 Commands:
-  all        Set up the stack, verify buffered ExtProc, and run the evaluation
+  all        Set up the stack, verify ExtProc, and run the evaluation
   setup      Create the cluster and install agentgateway, observability, and vSR
-  verify     Run small model-backed buffered ExtProc routing checks
+  verify     Run small model-backed ExtProc routing checks
   eval       Run a paid smoke test, the two-lane dataset, and a result summary
   report     Regenerate the latest text and JSON result summaries
   chart      Render an SVG chart from the latest or SUMMARY_FILE summary JSON
@@ -277,6 +284,10 @@ Important environment variables:
                           to every prompt.
   EVAL_REASONING_EFFORT   OpenAI reasoning effort for both lanes; defaults to
                           none to keep demo responses bounded.
+  EVAL_SEQUENTIAL_CONVERSATIONS
+                          Set true to preserve multi-turn conversation order.
+  EVAL_PROMPT_CACHE_KEY_PREFIX
+                          Stable prefix for per-lane conversation cache keys.
   SUMMARY_FILE             Summary JSON used by chart; defaults to the latest run
   EXAMPLE_REF             Defaults to main; use a SHA to pin upstream configuration
   EXAMPLE_REPO_URL        Defaults to the public agentgateway repository
@@ -1184,12 +1195,12 @@ cmd_verify() {
   url="$(gateway_url)"
   evaluation_id="semantic-routing-demo-verify-$(date -u +%Y%m%dT%H%M%SZ)-$$"
 
-  log "Verifying buffered ExtProc model selection with two small OpenAI requests"
+  log "Verifying ExtProc model selection with two small OpenAI requests"
   verify_routing_probe "${url}" "${evaluation_id}" routine gpt-5.4-nano \
     route_to_low_cost 'Implement a small Go helper and one table-driven test.'
   verify_routing_probe "${url}" "${evaluation_id}" advanced gpt-5.5 \
     route_to_expensive 'Design a distributed rate limiter that remains correct during Redis failover and regional network partitions.'
-  printf 'Buffered ExtProc routing checks passed for both model tiers.\n'
+  printf 'ExtProc routing checks passed for both model tiers.\n'
   verify_request_observability "${evaluation_id}"
 }
 
@@ -1203,6 +1214,8 @@ write_metadata() {
   VSR_IMAGE="${VSR_IMAGE_TAG}" \
   OBS_PROFILE="${OBSERVABILITY_PROFILE}" \
   EVAL_DATASET="${EVAL_DATASET}" \
+  EVAL_SEQUENTIAL="${EVAL_SEQUENTIAL_CONVERSATIONS}" \
+  EVAL_CACHE_KEY_PREFIX="${EVAL_PROMPT_CACHE_KEY_PREFIX}" \
   python3 - <<'PY'
 import json
 import os
@@ -1222,6 +1235,10 @@ metadata = {
     "dataset": {
         "path": os.environ["EVAL_DATASET"],
     },
+    "cache_benchmark": {
+        "sequential_conversations": os.environ["EVAL_SEQUENTIAL"].lower() == "true",
+        "prompt_cache_key_prefix": os.environ["EVAL_CACHE_KEY_PREFIX"],
+    },
     "requests": len(rows),
     "selected_models": sorted({row.get("selected_model", "") for row in rows if row.get("selected_model")}),
 }
@@ -1235,6 +1252,13 @@ PY
 
 run_eval_file() {
   local run_id="$1" output="$2" limit="$3"
+  local eval_args=()
+  if [[ "${EVAL_SEQUENTIAL_CONVERSATIONS}" == "true" ]]; then
+    eval_args+=(--sequential-conversations)
+  fi
+  if [[ -n "${EVAL_PROMPT_CACHE_KEY_PREFIX}" ]]; then
+    eval_args+=(--prompt-cache-key-prefix "${EVAL_PROMPT_CACHE_KEY_PREFIX}")
+  fi
   python3 "${ROOT_DIR}/scripts/run_eval.py" \
     --gateway-url "$(gateway_url)" \
     --dataset "${EVAL_DATASET}" \
@@ -1244,7 +1268,8 @@ run_eval_file() {
     --limit "${limit}" \
     --lanes "${EVAL_LANES}" \
     --reasoning-effort "${EVAL_REASONING_EFFORT}" \
-    --delay-sec "${EVAL_DELAY_SEC}"
+    --delay-sec "${EVAL_DELAY_SEC}" \
+    "${eval_args[@]}"
   python3 "${ROOT_DIR}/scripts/validate_results.py" \
     "${output}" --expected-lanes "${EVAL_LANES}"
 }
@@ -1268,7 +1293,7 @@ cmd_eval() {
 
   local eval_turns="${EVAL_LIMIT}"
   if [[ "${EVAL_LIMIT}" == "0" ]]; then
-    eval_turns="all 24 demo"
+    eval_turns="all dataset"
   fi
   log "Running ${eval_turns} prompts through routed and always_expensive"
   run_eval_file "${run_id}" "${result_file}" "${EVAL_LIMIT}"

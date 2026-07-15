@@ -256,6 +256,20 @@ class RenderEvaluationChartTest(unittest.TestCase):
                         {"model": "gpt-5.5", "requests": 8, "fraction": 0.4},
                     ],
                 },
+                "cache_transitions": [
+                    {
+                        "transition": "gpt-5.4-nano->gpt-5.5",
+                        "model_switch": True,
+                        "requests": 2,
+                        "cached_input_tokens": 1200,
+                    },
+                    {
+                        "transition": "gpt-5.5->gpt-5.5",
+                        "model_switch": False,
+                        "requests": 3,
+                        "cached_input_tokens": 800,
+                    },
+                ],
             },
             "prometheus": {
                 "status": "collected",
@@ -280,6 +294,12 @@ class RenderEvaluationChartTest(unittest.TestCase):
         self.assertIn("12 gpt-5.4-nano | 8 gpt-5.5", chart)
         self.assertIn("2.50 s p50", chart)
         self.assertIn("Catalog-priced agentgateway metrics", chart)
+        self.assertIn("CONVERSATION CACHE TRANSITIONS", chart)
+        self.assertIn("2 switches", chart)
+        self.assertIn("2,000 tokens", chart)
+        self.assertIn("CACHE READS BY TRANSITION", chart)
+        self.assertIn("routed: nano -&gt; 5.5, 1,200 (2)", chart)
+        self.assertIn("routed: 5.5 -&gt; 5.5, 800 (3)", chart)
 
     def test_falls_back_to_local_costs_and_uses_run_chart_name(self):
         summary = {
@@ -334,6 +354,50 @@ class EvaluationToolingTest(unittest.TestCase):
             "gpt-cheap",
         )
 
+    def test_evaluator_prices_cache_read_tokens(self):
+        catalog = {
+            "providers": {"openai": {"models": {
+                "gpt-cheap": {"rates": {
+                    "input": "1", "cacheRead": "0.5", "output": "2",
+                }},
+            }}}
+        }
+        usage = {
+            "input_tokens": 100,
+            "cached_input_tokens": 20,
+            "output_tokens": 10,
+        }
+
+        components = run_eval.estimate_cost_components(
+            catalog, "gpt-cheap", "gpt-cheap", usage
+        )
+
+        self.assertAlmostEqual(components["uncached_input"], 0.00008)
+        self.assertAlmostEqual(components["cache_read"], 0.00001)
+        self.assertAlmostEqual(components["output"], 0.00002)
+
+    def test_sequential_jobs_preserve_conversation_turn_order(self):
+        items = [
+            {"id": "b-2", "conversation_id": "b", "turn": 2},
+            {"id": "a-1", "conversation_id": "a", "turn": 1},
+            {"id": "b-1", "conversation_id": "b", "turn": 1},
+            {"id": "a-2", "conversation_id": "a", "turn": 2},
+        ]
+
+        jobs = run_eval.evaluation_jobs(
+            items, ["routed", "always_expensive"], True, seed=7
+        )
+
+        self.assertEqual(
+            [(item["id"], lane) for item, lane in jobs],
+            [
+                ("b-1", "routed"), ("b-2", "routed"),
+                ("a-1", "routed"), ("a-2", "routed"),
+                ("b-1", "always_expensive"), ("b-2", "always_expensive"),
+                ("a-1", "always_expensive"), ("a-2", "always_expensive"),
+            ],
+        )
+
     def test_default_dataset_has_expected_model_mix(self):
         dataset_path = DEMO_DIR / "data" / "demo-dataset.jsonl"
         rows = dataset.load_dataset(dataset_path)
@@ -356,6 +420,26 @@ class EvaluationToolingTest(unittest.TestCase):
         for row in rows:
             self.assertEqual(row["messages"][-1]["role"], "user")
             self.assertEqual(len(row["messages"]), 1)
+
+    def test_cache_transition_dataset_has_long_ordered_conversations(self):
+        dataset_path = DEMO_DIR / "data" / "cache-transition-dataset.jsonl"
+        rows = dataset.load_dataset(dataset_path)
+
+        self.assertEqual(len(rows), 8)
+        self.assertEqual(
+            {row["conversation_id"] for row in rows},
+            {"go-deployment-session", "rust-replication-session"},
+        )
+        for conversation_id in {row["conversation_id"] for row in rows}:
+            turns = [row for row in rows if row["conversation_id"] == conversation_id]
+            self.assertEqual([row["turn"] for row in turns], [1, 2, 3, 4])
+            prefix = turns[0]["messages"][0]
+            self.assertEqual(prefix["role"], "user")
+            self.assertGreater(len(prefix["content"]), 7000)
+            for turn in turns:
+                self.assertEqual(turn["messages"][0], prefix)
+                self.assertEqual(turn["messages"][1]["role"], "assistant")
+            self.assertGreater(len(turns[-1]["messages"]), len(turns[0]["messages"]))
 
     def test_evaluator_preserves_dataset_history(self):
         item = {
@@ -398,6 +482,23 @@ class EvaluationToolingTest(unittest.TestCase):
             summary["savings"]["counterfactual_on_routed_tokens"]["always_expensive_cost_usd"],
             0.0006,
         )
+
+    def test_summary_groups_cache_transitions(self):
+        rows = [
+            {
+                "lane": "routed", "ok": True,
+                "previous_selected_model": "gpt-cheap",
+                "selected_model": "gpt-expensive-2026-07-01",
+                "usage": {"input_tokens": 100, "cached_input_tokens": 20},
+                "cost_components_usd": {"uncached_input": 0.0004, "cache_read": 0.00005},
+            },
+        ]
+
+        transitions = summarize_results.cache_transition_summary(rows, self.catalog)
+
+        self.assertEqual(transitions[0]["transition"], "gpt-cheap->gpt-expensive")
+        self.assertTrue(transitions[0]["model_switch"])
+        self.assertEqual(transitions[0]["cached_input_tokens"], 20)
 
 class VerifyObservabilityTest(unittest.TestCase):
     def test_extracts_prometheus_values(self):

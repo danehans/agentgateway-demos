@@ -60,6 +60,16 @@ def parse_args():
     parser.add_argument("--limit", type=int, default=0)
     parser.add_argument("--seed", type=int, default=7)
     parser.add_argument("--delay-sec", type=float, default=0.0)
+    parser.add_argument(
+        "--sequential-conversations",
+        action="store_true",
+        help="Preserve turn order within each lane instead of shuffling requests.",
+    )
+    parser.add_argument(
+        "--prompt-cache-key-prefix",
+        default="",
+        help="Stable prefix used to build an OpenAI prompt_cache_key per lane and conversation.",
+    )
     parser.add_argument("--dry-run", action="store_true")
     return parser.parse_args()
 
@@ -96,17 +106,24 @@ def effective_rates(model, input_tokens):
     return {name: float(value) for name, value in rates.items()}
 
 
-def estimate_cost(catalog, request_model, response_model, usage):
+def estimate_cost_components(catalog, request_model, response_model, usage):
     input_tokens = float(usage.get("input_tokens", 0) or 0)
     cached_tokens = min(float(usage.get("cached_input_tokens", 0) or 0), input_tokens)
+    uncached_tokens = max(input_tokens - cached_tokens, 0)
     output_tokens = float(usage.get("output_tokens", 0) or 0)
     _, model = catalog_model(catalog, request_model, response_model)
     rates = effective_rates(model, input_tokens)
-    return (
-        (input_tokens - cached_tokens) * rates.get("input", 0.0)
-        + cached_tokens * rates.get("cacheRead", 0.0)
-        + output_tokens * rates.get("output", 0.0)
-    ) / 1_000_000
+    return {
+        "uncached_input": uncached_tokens * rates.get("input", 0.0) / 1_000_000,
+        "cache_read": cached_tokens * rates.get("cacheRead", 0.0) / 1_000_000,
+        "output": output_tokens * rates.get("output", 0.0) / 1_000_000,
+    }
+
+
+def estimate_cost(catalog, request_model, response_model, usage):
+    return sum(estimate_cost_components(
+        catalog, request_model, response_model, usage
+    ).values())
 
 
 def request_model(args, lane):
@@ -178,7 +195,14 @@ def request_messages(args, item):
     return [{"role": "system", "content": args.system_prompt}, *messages]
 
 
-def run_one(args, catalog, url, item, lane):
+def prompt_cache_key(args, item, lane):
+    if not args.prompt_cache_key_prefix:
+        return ""
+    conversation_id = item.get("conversation_id", item["id"])
+    return f"{args.prompt_cache_key_prefix}-{lane}-{conversation_id}"
+
+
+def run_one(args, catalog, url, item, lane, previous_selected_model=""):
     model = request_model(args, lane)
     headers = request_headers(args.run_id, item, lane)
     payload = {
@@ -190,6 +214,9 @@ def run_one(args, catalog, url, item, lane):
         payload["reasoning_effort"] = args.reasoning_effort
     if args.temperature is not None:
         payload["temperature"] = args.temperature
+    cache_key = prompt_cache_key(args, item, lane)
+    if cache_key:
+        payload["prompt_cache_key"] = cache_key
     status, response_headers, raw, error, latency_ms = post_json(url, payload, headers, args.timeout)
     try:
         body = json.loads(raw.decode("utf-8")) if raw else {}
@@ -200,9 +227,12 @@ def run_one(args, catalog, url, item, lane):
     response_usage = usage(body)
     cost_error = ""
     try:
-        cost = estimate_cost(catalog, selected_model, response_model, response_usage)
+        cost_components = estimate_cost_components(
+            catalog, selected_model, response_model, response_usage
+        )
+        cost = sum(cost_components.values())
     except ValueError as catalog_error:
-        cost, cost_error = None, str(catalog_error)
+        cost, cost_components, cost_error = None, {}, str(catalog_error)
     record = {
         "run_id": args.run_id,
         "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -216,12 +246,19 @@ def run_one(args, catalog, url, item, lane):
         "expected_model": item.get("expected_model", ""),
         "request_model": model,
         "selected_model": selected_model,
+        "previous_selected_model": previous_selected_model,
+        "model_switch": bool(
+            previous_selected_model
+            and canonical_model(catalog, previous_selected_model)
+            != canonical_model(catalog, selected_model)
+        ),
         "response_model": response_model,
         "status": status,
         "ok": 200 <= status < 300,
         "latency_ms": round(latency_ms, 3),
         "usage": response_usage,
         "cost_estimate_usd": cost,
+        "cost_components_usd": cost_components,
         "cost_error": cost_error,
         "routing_correct": canonical_model(catalog, selected_model) == canonical_model(catalog, item.get("expected_model", "")) if lane == "routed" else None,
         "request_headers": {key.lower(): value for key, value in headers.items() if key.lower() != "content-type"},
@@ -231,6 +268,26 @@ def run_one(args, catalog, url, item, lane):
     if not record["ok"]:
         record["error_body"] = body
     return record
+
+
+def evaluation_jobs(items, lanes, sequential_conversations, seed):
+    if not sequential_conversations:
+        jobs = [(item, lane) for item in items for lane in lanes]
+        random.Random(seed).shuffle(jobs)
+        return jobs
+
+    conversations = {}
+    for item in items:
+        conversation_id = item.get("conversation_id", item["id"])
+        conversations.setdefault(conversation_id, []).append(item)
+    for turns in conversations.values():
+        turns.sort(key=lambda item: item.get("turn", 1))
+    return [
+        (item, lane)
+        for lane in lanes
+        for turns in conversations.values()
+        for item in turns
+    ]
 
 
 def main():
@@ -246,17 +303,23 @@ def main():
         raise SystemExit(str(error)) from error
     lanes = [lane.strip() for lane in args.lanes.split(",") if lane.strip()]
     url = request_url(args.gateway_url, args.path)
-    jobs = [(item, lane) for item in items for lane in lanes]
-    random.Random(args.seed).shuffle(jobs)
+    jobs = evaluation_jobs(items, lanes, args.sequential_conversations, args.seed)
     print(f"run_id={args.run_id}\nurl={url}\ndataset_items={len(items)} selection={selection} lanes={','.join(lanes)} total_requests={len(jobs)}\noutput={args.output}")
     if args.dry_run:
         for item, lane in jobs[:10]:
             print(f"dry-run {lane} {item['id']} model={request_model(args, lane)}")
         return
     args.output.parent.mkdir(parents=True, exist_ok=True)
+    selected_models = {}
     with args.output.open("w", encoding="utf-8") as stream:
         for index, (item, lane) in enumerate(jobs, 1):
-            record = run_one(args, catalog, url, item, lane)
+            conversation_key = (lane, item.get("conversation_id", item["id"]))
+            record = run_one(
+                args, catalog, url, item, lane,
+                selected_models.get(conversation_key, ""),
+            )
+            if record["ok"] and record["selected_model"]:
+                selected_models[conversation_key] = record["selected_model"]
             stream.write(json.dumps(record, ensure_ascii=False) + "\n")
             stream.flush()
             print(f"{index:03d}/{len(jobs)} {lane:15s} {item['id']:14s} status={record['status']} selected={record['selected_model'] or '-'} latency_ms={record['latency_ms']:.1f}")

@@ -21,7 +21,7 @@ answers four questions:
 ```mermaid
 flowchart LR
     A[Application or coding agent] -->|model: auto| G[agentgateway]
-    G -->|Buffered ExtProc| S[vSR semantic policy]
+    G -->|ExtProc| S[vSR semantic policy]
     S -->|routine coding| L[gpt-5.4-nano]
     S -->|complex coding| H[gpt-5.5]
     L --> G
@@ -60,8 +60,8 @@ and uses the `agentgateway-system` and `telemetry` namespaces. Before its
 primary evaluation, it installs MetalLB, agentgateway, the model cost catalog,
 vSR, and the OpenTelemetry stack. It verifies component rollouts, storage,
 services, port-forwards, HTTP and gRPC readiness endpoints, the model catalog,
-the Gateway listener, buffered ExtProc routing, and catalog-priced metrics,
-logs, and traces.
+the Gateway listener, ExtProc routing, and catalog-priced metrics, logs, and
+traces.
 
 Each check retries for a bounded period and exits with a diagnostic if it cannot
 become healthy. `setup` makes no OpenAI requests. `all` sends 54 small billable
@@ -84,7 +84,9 @@ Each run writes these files under `results/`:
 - `<RUN_ID>-summary.json` and `.txt`: local and evaluation-scoped Prometheus
   data
 - `<RUN_ID>-chart.svg`: spend, routing agreement, model mix, complex-prompt
-  escalation, and latency
+  escalation, latency, and, for sequential multi-turn runs, conversation cache
+  transitions, provider-reported cache tokens, and cache-read attribution by
+  lane and model transition
 
 The chart uses two lanes only:
 
@@ -113,11 +115,8 @@ SUMMARY_FILE=results/<RUN_ID>-summary.json ./demo.sh chart
 
 ## Tune the policy
 
-The vSR values come from the selected agentgateway example revision:
-
-```text
-../.work/cost-based-semantic-routing/agentgateway/examples/llm-semantic-routing/k8s/semantic-router-values.yaml
-```
+The vSR values come from the upstream
+[agentgateway semantic-router values](https://github.com/agentgateway/agentgateway/blob/main/examples/llm-semantic-routing/k8s/semantic-router-values.yaml).
 
 Adjust the routing signals, redeploy them, and run the same sample again:
 
@@ -130,6 +129,44 @@ The chart and summary make the trade-off visible. Increasing escalation to
 `gpt-5.5` will generally improve the policy's complex-prompt coverage and raise
 spend; lowering it does the opposite. The goal is a reasonable balance, not
 100% agreement with a small checked-in dataset.
+
+## Measure Cache Transitions
+
+The default dataset is a small, independent-request evaluation. It does not
+claim to measure a coding agent's prompt-cache behavior. Set sequential mode to
+use the checked-in long-session Go and Rust dataset, preserve turn order, and
+provide a unique, stable cache-key prefix:
+
+```bash
+EVAL_SEQUENTIAL_CONVERSATIONS=true \
+EVAL_PROMPT_CACHE_KEY_PREFIX="cache-benchmark-$(date -u +%Y%m%dT%H%M%SZ)" \
+./demo.sh eval --yes
+```
+
+The runner uses a separate `prompt_cache_key` for each evaluation lane and
+conversation. It records the prior selected model, model-switch flag, cached
+input tokens, and input/output cost components. The summary's `Conversation
+cache transitions` section groups those values by actual transition, such as
+`gpt-5.4-nano->gpt-5.5`.
+
+The current GPT-5.4 Nano and GPT-5.5 demo reports cache reads only. Cache-write
+accounting will be added when the demo supports GPT-5.6 models.
+
+Use a dataset with complete conversation history and a long, identical leading
+prefix on successive turns. A cache key does not create a cache hit; only the
+upstream provider's returned cached-token usage establishes whether the prefix
+was reused.
+
+The checked-in cache-transition dataset has two four-turn conversations. Each
+has a stable project-reference prefix of more than 7,000 characters that the
+loader retains byte-for-byte before every turn, making later prefix reuse
+observable when the upstream provider supports it. Override `EVAL_DATASET` with
+representative application transcripts to measure your own agent traffic.
+
+Prompt caching is controlled and reported by the upstream model provider.
+Agentgateway and vSR do not copy a conversation prefix or migrate a provider
+cache between models. Treat a model crossing as a potential cache miss unless
+the provider reports cached input tokens for that request.
 
 The vSR chart and ExtProc image default to the rolling `0.0.0-latest` and
 `latest` tags. Override both together with fixed versions when reproducing a
@@ -149,7 +186,7 @@ EXAMPLE_REF=<agentgateway-commit-sha> ./demo.sh refresh --yes
 
 ```bash
 ./demo.sh setup       # Install the cluster components without model traffic
-./demo.sh verify      # Verify buffered ExtProc selects both model tiers
+./demo.sh verify      # Verify ExtProc selects both model tiers
 ./demo.sh eval        # Run the smoke test and two-lane evaluation
 ./demo.sh report      # Regenerate the summaries from the latest result
 ./demo.sh chart       # Render the latest SVG chart

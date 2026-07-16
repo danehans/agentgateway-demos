@@ -95,6 +95,12 @@ The chart uses two lanes only:
 | `routed` | vSR selects `gpt-5.4-nano` or `gpt-5.5`. |
 | `always_expensive` | Every request uses `gpt-5.5`; the cost baseline. |
 
+The default topology permits direct requests to either configured model. The
+`always_expensive` lane deliberately sends `model: "gpt-5.5"` so it can measure
+the always-expensive baseline. Do not enable the upstream example's optional
+`require-auto` validation policy during this evaluation; it rejects this
+forced-model lane.
+
 The result chart shows the routed model mix and the fraction of dataset prompts
 labelled complex that vSR escalated to `gpt-5.5`. Together, those values make it
 obvious whether the savings came from a real tiered policy rather than routing

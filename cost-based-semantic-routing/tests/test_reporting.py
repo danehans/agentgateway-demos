@@ -403,18 +403,18 @@ class EvaluationToolingTest(unittest.TestCase):
         rows = dataset.load_dataset(dataset_path)
 
         self.assertEqual(len({row["id"] for row in rows}), len(rows))
-        self.assertEqual(len(rows), 24)
+        self.assertEqual(len(rows), 50)
         self.assertEqual(
-            sum(row["expected_model"] == "gpt-5.4-nano" for row in rows), 12
+            sum(row["expected_model"] == "gpt-5.4-nano" for row in rows), 25
         )
         self.assertEqual(
-            sum(row["expected_model"] == "gpt-5.5" for row in rows), 12
+            sum(row["expected_model"] == "gpt-5.5" for row in rows), 25
         )
         self.assertEqual(
             {row["language"] for row in rows}, {"go", "rust"}
         )
-        self.assertEqual(sum(row["language"] == "go" for row in rows), 12)
-        self.assertEqual(sum(row["language"] == "rust" for row in rows), 12)
+        self.assertEqual(sum(row["language"] == "go" for row in rows), 25)
+        self.assertEqual(sum(row["language"] == "rust" for row in rows), 25)
         self.assertEqual({row["max_tokens"] for row in rows if "routine" in row["family"]}, {256})
         self.assertEqual({row["max_tokens"] for row in rows if "advanced" in row["family"]}, {1024})
         for row in rows:
@@ -425,14 +425,16 @@ class EvaluationToolingTest(unittest.TestCase):
         dataset_path = DEMO_DIR / "data" / "cache-transition-dataset.jsonl"
         rows = dataset.load_dataset(dataset_path)
 
-        self.assertEqual(len(rows), 8)
+        self.assertEqual(len(rows), 20)
         self.assertEqual(
             {row["conversation_id"] for row in rows},
             {"go-deployment-session", "rust-replication-session"},
         )
         for conversation_id in {row["conversation_id"] for row in rows}:
             turns = [row for row in rows if row["conversation_id"] == conversation_id]
-            self.assertEqual([row["turn"] for row in turns], [1, 2, 3, 4])
+            self.assertEqual(
+                [row["turn"] for row in turns], list(range(1, 11))
+            )
             prefix = turns[0]["messages"][0]
             self.assertEqual(prefix["role"], "user")
             self.assertGreater(len(prefix["content"]), 7000)

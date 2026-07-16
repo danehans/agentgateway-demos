@@ -64,12 +64,12 @@ the Gateway listener, ExtProc routing, and catalog-priced metrics, logs, and
 traces.
 
 Each check retries for a bounded period and exits with a diagnostic if it cannot
-become healthy. `setup` makes no OpenAI requests. `all` sends 54 small billable
-requests by default: two routing probes, four smoke-test requests, and 48
+become healthy. `setup` makes no OpenAI requests. `all` sends 106 small billable
+requests by default: two routing probes, four smoke-test requests, and 100
 primary requests.
 
-The dataset has 24 concise Go and Rust developer prompts: 12 routine
-implementation or test tasks and 12 complex correctness or distributed-systems
+The dataset has 50 concise Go and Rust developer prompts: 25 routine
+implementation or test tasks and 25 complex correctness or distributed-systems
 tasks. The runner holds request settings constant across both lanes, including
 `reasoning_effort: none`. Routine prompts have a 256-token cap and complex
 prompts have a 1024-token cap.
@@ -143,6 +143,9 @@ EVAL_PROMPT_CACHE_KEY_PREFIX="cache-benchmark-$(date -u +%Y%m%dT%H%M%SZ)" \
 ./demo.sh eval --yes
 ```
 
+With `all --yes`, this cache evaluation sends 46 billable requests: two routing
+probes, four smoke-test requests, and 40 primary requests across the two lanes.
+
 The runner uses a separate `prompt_cache_key` for each evaluation lane and
 conversation. It records the prior selected model, model-switch flag, cached
 input tokens, and input/output cost components. The summary's `Conversation
@@ -157,7 +160,7 @@ prefix on successive turns. A cache key does not create a cache hit; only the
 upstream provider's returned cached-token usage establishes whether the prefix
 was reused.
 
-The checked-in cache-transition dataset has two four-turn conversations. Each
+The checked-in cache-transition dataset has two ten-turn conversations. Each
 has a stable project-reference prefix of more than 7,000 characters that the
 loader retains byte-for-byte before every turn, making later prefix reuse
 observable when the upstream provider supports it. Override `EVAL_DATASET` with

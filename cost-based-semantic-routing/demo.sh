@@ -844,6 +844,13 @@ install_agentgateway() {
   log "Verified agentgateway controller and GatewayClass"
 }
 
+has_required_example_files() {
+  local example_file
+  for example_file in k8s/semantic-router-values.yaml k8s/agentgateway-routing.yaml; do
+    [[ -f "${EXAMPLE_DIR}/${example_file}" ]] || return 1
+  done
+}
+
 fetch_example() {
   local cached_repo_url cached_ref actual_repo_url example_file
   if [[ -d "${CHECKOUT_DIR}/.git" && -f "${EXAMPLE_SOURCE_FILE}" ]]; then
@@ -852,7 +859,8 @@ fetch_example() {
     actual_repo_url="$(git -C "${CHECKOUT_DIR}" config --get remote.origin.url || true)"
     if [[ "${cached_repo_url}" == "${EXAMPLE_REPO_URL}" &&
       "${cached_ref}" == "${EXAMPLE_REF}" &&
-      "${actual_repo_url}" == "${EXAMPLE_REPO_URL}" ]]; then
+      "${actual_repo_url}" == "${EXAMPLE_REPO_URL}" ]] &&
+      has_required_example_files; then
       return
     fi
     log "Replacing cached agentgateway configuration with ${EXAMPLE_REPO_URL} (${EXAMPLE_REF})"

@@ -844,15 +844,23 @@ install_agentgateway() {
   log "Verified agentgateway controller and GatewayClass"
 }
 
+has_required_example_files() {
+  local example_file
+  for example_file in k8s/semantic-router-values.yaml k8s/agentgateway-routing.yaml; do
+    [[ -f "${EXAMPLE_DIR}/${example_file}" ]] || return 1
+  done
+}
+
 fetch_example() {
-  local cached_repo_url cached_ref actual_repo_url
+  local cached_repo_url cached_ref actual_repo_url example_file
   if [[ -d "${CHECKOUT_DIR}/.git" && -f "${EXAMPLE_SOURCE_FILE}" ]]; then
     cached_repo_url="$(sed -n '1p' "${EXAMPLE_SOURCE_FILE}")"
     cached_ref="$(sed -n '2p' "${EXAMPLE_SOURCE_FILE}")"
     actual_repo_url="$(git -C "${CHECKOUT_DIR}" config --get remote.origin.url || true)"
     if [[ "${cached_repo_url}" == "${EXAMPLE_REPO_URL}" &&
       "${cached_ref}" == "${EXAMPLE_REF}" &&
-      "${actual_repo_url}" == "${EXAMPLE_REPO_URL}" ]]; then
+      "${actual_repo_url}" == "${EXAMPLE_REPO_URL}" ]] &&
+      has_required_example_files; then
       return
     fi
     log "Replacing cached agentgateway configuration with ${EXAMPLE_REPO_URL} (${EXAMPLE_REF})"
@@ -870,7 +878,11 @@ fetch_example() {
   git -C "${CHECKOUT_DIR}" checkout --detach --quiet FETCH_HEAD
   git -C "${CHECKOUT_DIR}" rev-parse HEAD > "${WORK_DIR}/example-revision"
   printf '%s\n%s\n' "${EXAMPLE_REPO_URL}" "${EXAMPLE_REF}" > "${EXAMPLE_SOURCE_FILE}"
-  [[ -d "${EXAMPLE_DIR}" ]] || die "${EXAMPLE_REF} does not contain examples/llm-semantic-routing"
+  [[ -d "${EXAMPLE_DIR}" ]] || die "${EXAMPLE_REPO_URL} (${EXAMPLE_REF}) does not contain examples/llm-semantic-routing"
+  for example_file in k8s/semantic-router-values.yaml k8s/agentgateway-routing.yaml; do
+    [[ -f "${EXAMPLE_DIR}/${example_file}" ]] || die \
+      "${EXAMPLE_REPO_URL} (${EXAMPLE_REF}) does not contain examples/llm-semantic-routing/${example_file}"
+  done
 }
 
 agctl_path() {

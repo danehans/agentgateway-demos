@@ -17,11 +17,11 @@ jobs:
       run: bash -n cost-based-semantic-routing/demo.sh
     - name: ShellCheck
       run: shellcheck cost-based-semantic-routing/demo.sh
-    - name: Released vSR defaults
+    - name: Latest vSR defaults
       run: |
         source cost-based-semantic-routing/config/versions.env
-        test "${VSR_CHART_VERSION}" = "0.3.0"
-        test "${VSR_IMAGE_TAG}" = "v0.3.0"
+        test "${VSR_CHART_VERSION}" = "0.0.0-latest"
+        test "${VSR_IMAGE_TAG}" = "latest"
     - name: Python syntax
       run: |
         python3 -m py_compile \

@@ -83,7 +83,7 @@ Each run writes these files under `results/`:
 - `<RUN_ID>-metadata.json`: component versions and fetched example revision
 - `<RUN_ID>-summary.json` and `.txt`: local and evaluation-scoped Prometheus
   data
-- `<RUN_ID>-chart.svg`: spend, routing agreement, model mix, complex-prompt
+- `<RUN_ID>-chart.svg`: spend, expected-tier agreement, model mix, complex-prompt
   escalation, latency, and, for sequential multi-turn runs, conversation cache
   transitions, provider-reported cache tokens, and cache-read attribution by
   lane and model transition
@@ -98,15 +98,16 @@ The chart uses two lanes only:
 The default topology permits direct requests to either configured model. The
 `always_expensive` lane deliberately sends `model: "gpt-5.5"` so it can measure
 the always-expensive baseline. Do not enable the upstream example's optional
-`require-auto` validation policy during this evaluation; it rejects this
-forced-model lane.
+`force-auto` policy during this evaluation; it rewrites this forced-model lane
+to `auto`.
 
 The result chart shows the routed model mix and the fraction of dataset prompts
 labelled complex that vSR escalated to `gpt-5.5`. Together, those values make it
 obvious whether the savings came from a real tiered policy rather than routing
-everything to nano. It also shows dataset-label agreement as a simple policy
-sanity check. This is not an answer-quality benchmark; it demonstrates that the
-policy preserves an expensive tier for work the sample identifies as complex.
+everything to nano. Expected-tier agreement is the fraction of requests where
+the selected model matches the dataset's expected model label. It is a policy
+sanity check, not an answer-quality benchmark; it demonstrates that the policy
+preserves an expensive tier for work the sample identifies as complex.
 
 When Prometheus is enabled, agentgateway token metrics are priced with the
 loaded model catalog and every lookup must be exact. That catalog-priced report

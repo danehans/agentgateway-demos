@@ -168,7 +168,7 @@ def render_chart(summary):
 
     return f'''<svg xmlns="http://www.w3.org/2000/svg" width="960" height="{chart_height}" viewBox="0 0 960 {chart_height}" role="img" aria-labelledby="title description">
   <title id="title">Semantic routing evaluation results</title>
-  <desc id="description">Semantic routing spend, routing agreement, model mix, latency, and cache transitions for run {text(run_id)}.</desc>
+  <desc id="description">Semantic routing spend, expected-tier agreement, model mix, latency, and cache transitions for run {text(run_id)}.</desc>
   <style>
     text {{ font-family: Arial, Helvetica, sans-serif; fill: #0f172a; }}
     .title {{ font-size: 26px; font-weight: 700; }}
@@ -190,9 +190,9 @@ def render_chart(summary):
   <text class="kpi-value" x="48" y="151">{savings:.1%}</text>
   <text class="subtitle" x="48" y="173">Routed versus always expensive</text>
   <line x1="337" y1="112" x2="337" y2="177" stroke="#cbd5e1"/>
-  <text class="kpi-label" x="370" y="121">ROUTING AGREEMENT</text>
+  <text class="kpi-label" x="370" y="121">EXPECTED-TIER AGREEMENT</text>
   <text class="kpi-value" x="370" y="151">{text(agreement)}</text>
-  <text class="subtitle" x="370" y="173">Expected tiers in this coding sample</text>
+  <text class="subtitle" x="370" y="173">Selected tier matched the dataset label</text>
   <line x1="655" y1="112" x2="655" y2="177" stroke="#cbd5e1"/>
   <text class="kpi-label" x="688" y="121">ROUTED P50 LATENCY</text>
   <text class="kpi-value" x="688" y="151">{metrics['routed_p50']:.2f} s</text>
@@ -234,7 +234,7 @@ def render_chart(summary):
   <text class="section" x="673" y="550">CACHE READS BY TRANSITION</text>
   {cache_read_rows}
 
-  <text class="note" x="48" y="{footer_y}">Agreement uses expected tiers in the checked-in coding sample; cache tokens are reported by the upstream provider.</text>
+  <text class="note" x="48" y="{footer_y}">Expected-tier agreement compares the selected tier with the checked-in dataset label; cache tokens are reported by the upstream provider.</text>
 </svg>
 '''
 
